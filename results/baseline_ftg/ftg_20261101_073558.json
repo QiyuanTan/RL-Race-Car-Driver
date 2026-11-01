@@ -1,0 +1,109 @@
+{
+  "params": {
+    "turn_in_distance": 0.0
+  },
+  "summary": {
+    "env": "SingleAgentAustria-v0",
+    "seeds": [
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108,
+      109
+    ],
+    "laps_completed": "10/10",
+    "collision_free_laps": 8,
+    "lap_time_mean": 68.52,
+    "lap_time_std": 0.53,
+    "lap_time_best": 67.74,
+    "lap_time_worst": 69.38,
+    "collisions_mean": 0.3
+  },
+  "episodes": [
+    {
+      "seed": 100,
+      "lap_completed": true,
+      "lap_time": 67.74,
+      "collisions": 0,
+      "progress": 0.996,
+      "sim_time": 67.74
+    },
+    {
+      "seed": 101,
+      "lap_completed": true,
+      "lap_time": 68.01,
+      "collisions": 0,
+      "progress": 0.996,
+      "sim_time": 68.01
+    },
+    {
+      "seed": 102,
+      "lap_completed": true,
+      "lap_time": 68.27,
+      "collisions": 0,
+      "progress": 0.996,
+      "sim_time": 68.27
+    },
+    {
+      "seed": 103,
+      "lap_completed": true,
+      "lap_time": 69.38,
+      "collisions": 2,
+      "progress": 0.997,
+      "sim_time": 69.38
+    },
+    {
+      "seed": 104,
+      "lap_completed": true,
+      "lap_time": 68.65,
+      "collisions": 0,
+      "progress": 0.996,
+      "sim_time": 68.65
+    },
+    {
+      "seed": 105,
+      "lap_completed": true,
+      "lap_time": 68.12,
+      "collisions": 0,
+      "progress": 0.996,
+      "sim_time": 68.12
+    },
+    {
+      "seed": 106,
+      "lap_completed": true,
+      "lap_time": 68.03,
+      "collisions": 1,
+      "progress": 0.996,
+      "sim_time": 68.03
+    },
+    {
+      "seed": 107,
+      "lap_completed": true,
+      "lap_time": 68.84,
+      "collisions": 0,
+      "progress": 0.996,
+      "sim_time": 68.84
+    },
+    {
+      "seed": 108,
+      "lap_completed": true,
+      "lap_time": 68.86,
+      "collisions": 0,
+      "progress": 0.996,
+      "sim_time": 68.86
+    },
+    {
+      "seed": 109,
+      "lap_completed": true,
+      "lap_time": 69.26,
+      "collisions": 0,
+      "progress": 0.996,
+      "sim_time": 69.26
+    }
+  ]
+}
