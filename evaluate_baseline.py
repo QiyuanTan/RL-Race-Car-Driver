@@ -28,9 +28,28 @@ def run_episode(env, driver, seed):
     progress = 0.0  # net progress from the starting position, measured in laps
     last_progress = info['progress']
     done = truncated = False
+    previous_motor = None
+    previous_steering = None
+    motor_change_sum = 0.0
+    steering_change_sum = 0.0
+    change_count = 0
 
     while not (done or truncated):
-        obs, reward, done, truncated, info = env.step(driver.act(obs))
+
+        action = driver.act(obs) # action of the driver
+        motor = float(action['motor'][0]) # current motor command
+        steering = float(action['steering'][0]) # current steering command
+
+        # check with the previous commands/action
+        if previous_motor is not None:
+            motor_change_sum += abs(motor - previous_motor)
+            steering_change_sum += abs(steering - previous_steering)
+            change_count += 1
+        # save the action for next
+        previous_motor = motor
+        previous_steering = steering
+
+        obs, reward, done, truncated, info = env.step(action) # execute the action in the simulator
 
         # Count a new contact once. Staying against the wall does not add more.
         if info['wall_collision'] and not touching_wall:
@@ -52,9 +71,42 @@ def run_episode(env, driver, seed):
         if info['lap'] >= 2 and lap_time is None:
             lap_time = round(float(info['time']), 2)
 
-    return dict(seed=seed, lap_completed=lap_time is not None, lap_time=lap_time,
-                collisions=collisions, progress=round(float(progress), 3),
-                sim_time=round(float(info['time']), 2))
+    # calculate average changes between consecutive actions
+    if change_count > 0:
+        motor_smoothness = motor_change_sum / change_count
+        steering_smoothness = steering_change_sum / change_count
+    else:
+        motor_smoothness = None
+        steering_smoothness = None
+
+    # round the smoothness values, only if they exist
+    if motor_smoothness is not None:
+        motor_smoothness = round(motor_smoothness, 6)
+    if steering_smoothness is not None:
+        steering_smoothness = round(steering_smoothness, 6)
+
+    # check if the lap was finished
+    if lap_time is not None:
+        lap_completed = True
+    else:
+        lap_completed = False
+
+    # round progress and simulation time
+    progress = round(float(progress), 3)
+    sim_time = round(float(info['time']), 2)
+
+    # build the results dictionary
+    results = {
+        "seed": seed,
+        "lap_completed": lap_completed,
+        "lap_time": lap_time,
+        "collisions": collisions,
+        "progress": progress,
+        "sim_time": sim_time,
+        "motor_smoothness": motor_smoothness,
+        "steering_smoothness": steering_smoothness,
+    }
+    return results
 
 
 def run_episode_in_new_process(job):
@@ -79,6 +131,39 @@ def summarize(episodes):
     """combine the episode results into one summary."""
     # Only finished laps have a lap time. Collision stats include every episode.
     laps = [e['lap_time'] for e in episodes if e['lap_completed']]
+
+
+    # get all motor smoothness values that exist
+    motor_values = [] # start with empty list
+    for i in episodes: # go through each episode one by one
+        value = i['motor_smoothness'] # get this episode's motor smoothness
+        if value is not None: # only keep it if it actually exists
+            motor_values.append(value) # add it to the list
+
+    # get all steering smoothness values that exist
+    steering_values = []
+    for j in episodes:
+        value = j['steering_smoothness']
+        if value is not None:
+            steering_values.append(value)
+
+
+    # calculate the average motor smoothness
+    if len(motor_values) > 0:
+        motor_mean = np.mean(motor_values) # take the average
+        motor_mean = float(motor_mean) # turn it into a normal Python number
+        motor_smoothness_mean = round(motor_mean, 6) # round to 6 decimal places
+    else:
+        motor_smoothness_mean = None
+
+    # Calculate the average steering smoothness
+    if len(steering_values) > 0:
+        steering_mean = np.mean(steering_values)
+        steering_mean = float(steering_mean)
+        steering_smoothness_mean = round(steering_mean, 6) # round to 6 decimal
+    else:
+        steering_smoothness_mean = None
+
     return dict(
         env=ENV_ID,
         seeds=[e['seed'] for e in episodes],
@@ -89,6 +174,8 @@ def summarize(episodes):
         lap_time_best=round(min(laps), 2) if laps else None,
         lap_time_worst=round(max(laps), 2) if laps else None,
         collisions_mean=float(np.mean([e['collisions'] for e in episodes])),
+        motor_smoothness_mean=motor_smoothness_mean,        # use the value calculated above
+        steering_smoothness_mean=steering_smoothness_mean,  # use the value calculated above
     )
 
 
