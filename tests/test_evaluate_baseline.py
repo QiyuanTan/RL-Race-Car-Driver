@@ -1,7 +1,9 @@
-"""unti tests for the FTG evaluation smoothness metrics."""
+"""unit tests for the FTG evaluation smoothness metrics."""
 
 import numpy as np
 import pytest
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from evaluate_baseline import run_episode, summarize
 
 
