@@ -6,7 +6,7 @@ interface: `act(obs)` returns `{'motor': ..., 'steering': ...}`. No training is 
 ## How to run
 
 ```bash
-python -m pytest tests/                                          # 10 unit tests, no simulator needed
+python -m pytest tests/                                          # 14 unit tests, no simulator needed
 python evaluate_baseline.py --episodes 10 --seed 100 --workers 4  # evaluate the default settings
 python evaluate_baseline.py --episodes 10 --seed 100 --workers 4 --param turn_in_distance=0  # plain FTG
 python evaluate_baseline.py --episodes 1 --render                 # watch it drive (needs a display)
@@ -57,27 +57,37 @@ Plain FTG scraped the outer wall at the exit of the Austria hairpin (around x = 
 
 - Same start for every episode (`mode='grid'`). Seed i fixes the LiDAR noise.
 - Lap time = simulated time when `info['lap']` reaches 2. Collisions = number of separate wall contacts.
+- Smoothness = average absolute change of the motor (or steering) command between two consecutive steps.
+  **Lower = smoother.** It is measured per simulation step, so every method must output an action every
+  step for a fair comparison (frame skip / action repeat would make a method look smoother than it is).
 - Each episode runs in a fresh process, so the same seed always gives the same result.
 - Parameters were tuned on seeds 0-7; the results below use seeds 100-109, which were not used for tuning.
 - These metrics are a minimal version. They should be aligned with the team metrics (issue #4).
 
 ## Results (Austria, seeds 100-109)
 
-| setting | laps completed | collision-free laps | lap time (mean ± std) | file |
-|---|---|---|---|---|
-| **default (with turn-in rule)** | 10/10 | **10/10** | **81.37 ± 0.48 s** | `ftg_20261101_073355.json` |
-| plain FTG (`turn_in_distance=0`) | 10/10 | 8/10 | 68.52 ± 0.53 s | `ftg_20261101_073558.json` |
-| default + `max_speed=4.0` | 10/10 | 10/10 | 78.12 ± 0.63 s | `ftg_20261101_073818.json` |
+All three settings were run on the same machine (M1 Mac, Python 3.9, conda-forge pybullet).
+
+| setting | laps completed | collision-free laps | collisions (mean) | lap time (mean ± std) | motor smoothness | steering smoothness | file |
+|---|---|---|---|---|---|---|---|
+| **default (with turn-in rule)** | 10/10 | **10/10** | 0.0 | **81.77 ± 0.77 s** | 0.0451 | 0.0410 | `ftg_20261102_190856.json` |
+| plain FTG (`turn_in_distance=0`) | 10/10 | 2/10 | 1.3 | 68.56 ± 0.35 s | 0.0494 | 0.0177 | `ftg_20261102_191031.json` |
+| default + `max_speed=4.0` | 10/10 | 10/10 | 0.0 | 77.64 ± 0.71 s | 0.0456 | 0.0415 | `ftg_20261102_191159.json` |
 
 - The turn-in rule removes the hairpin contacts but costs about 13 s per lap.
-- `max_speed=4.0` was also collision-free on these seeds and about 3 s faster. It is not the default
+- The turn-in rule makes steering about twice as jumpy (0.041 vs 0.018), because it switches the target to
+  45 deg at once when a wall gets close. It trades steering smoothness for safety.
+- `max_speed=4.0` was also collision-free on these seeds and about 4 s faster. It is not the default
   because it was not chosen on the tuning seeds. Picking it now would mean tuning on the test seeds.
+- Plain FTG is right at the limit at the hairpin, so its collision count depends on the machine: the same
+  seeds gave 8/10 collision-free laps on Linux (pybullet 3.2.5) but 2/10 on the M1 Mac. The default setting
+  was collision-free on both.
 
 ## Limitations
 
 - Only tested on Austria with the grid start.
 - The turn-in distance (3.5 m) was tuned for this track.
 - The car cannot reverse. If it ever gets stuck against a wall, it stays there until the time limit.
-- Lap times can differ slightly between machines and pybullet versions (e.g. seed 100: 81.34 s on
-  Linux / pybullet 3.2.5, 81.77 s on an M1 Mac / conda-forge pybullet). Compare all methods on one machine.
+- Results differ between machines and pybullet versions (e.g. seed 100: 81.34 s on Linux / pybullet 3.2.5,
+  81.77 s on the M1 Mac; plain FTG collisions differ even more, see above). Compare all methods on one machine.
 - The driver only reads `lidar` and `velocity` from the observation, never `info`.
