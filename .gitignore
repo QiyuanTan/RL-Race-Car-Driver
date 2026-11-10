@@ -3,3 +3,4 @@ racecar_gym
 __pycache__/
 *.pyc
 .venv*/
+logs/

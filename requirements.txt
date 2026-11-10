@@ -11,3 +11,4 @@ pandas==1.5.3
 pybullet==3.2.5
 tqdm>=4.64.1,<5
 rich>=12,<15
+tensorboard>=2.12,<3

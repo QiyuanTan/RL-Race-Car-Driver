@@ -4,6 +4,7 @@ from gymnasium import ObservationWrapper, spaces
 import numpy as np
 from functools import partial
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecEnv
+from stable_baselines3.common.monitor import Monitor
 
 class SB3Driver(Driver):
     def __init__(self, env, model_class, policy="MultiInputPolicy", **kwargs):
@@ -13,7 +14,7 @@ class SB3Driver(Driver):
                 start_method="spawn",
             )
         else:
-            self.env = FlattenActionWrapper(SB3ObservationWrapper(env))
+            self.env = Monitor(FlattenActionWrapper(SB3ObservationWrapper(env)))
         super().__init__(self.env)
         self.model_class = model_class
         self.model = model_class(policy, self.env, **kwargs)
@@ -36,7 +37,7 @@ class SB3Driver(Driver):
         env = factory()
         env = FlattenActionWrapper(env)
         env = SB3ObservationWrapper(env)
-        return env
+        return Monitor(env)
 
 class SB3ObservationWrapper(ObservationWrapper):
     """Convert scalar Box entries in Dict observations to one-element vectors."""
