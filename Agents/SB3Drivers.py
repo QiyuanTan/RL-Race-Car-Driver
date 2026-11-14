@@ -7,17 +7,21 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, VecEnv
 from stable_baselines3.common.monitor import Monitor
 
 class SB3Driver(Driver):
-    def __init__(self, env, model_class, policy="MultiInputPolicy", **kwargs):
+    def __init__(self, env, model_class, wrappers=None, policy="MultiInputPolicy", **kwargs):
+        if wrappers is None:
+            wrappers = []
+        self.env_wrappers = wrappers
         if isinstance(env, (list, tuple)):
             self.env = SubprocVecEnv(
                 [partial(self._adapt_env, factory) for factory in env],
                 start_method="spawn",
             )
         else:
-            self.env = Monitor(FlattenActionWrapper(SB3ObservationWrapper(env)))
+            self.env = self.apply_wrappers(env)
         super().__init__(self.env)
         self.model_class = model_class
         self.model = model_class(policy, self.env, **kwargs)
+
 
     def save(self, path):
         self.model.save(path)
@@ -32,12 +36,15 @@ class SB3Driver(Driver):
         action, _states = self.model.predict(obs)
         return action
 
-    @staticmethod
-    def _adapt_env(factory):
+    def apply_wrappers(self, env):
+        for wrapper in self.env_wrappers:
+            env = wrapper(env)
+        return env
+
+    def _adapt_env(self, factory):
         env = factory()
-        env = FlattenActionWrapper(env)
-        env = SB3ObservationWrapper(env)
-        return Monitor(env)
+        env = self.apply_wrappers(env)
+        return env
 
 class SB3ObservationWrapper(ObservationWrapper):
     """Convert scalar Box entries in Dict observations to one-element vectors."""
