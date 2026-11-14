@@ -1,16 +1,27 @@
+from stable_baselines3 import PPO
+from pathlib import Path
+
 from Agents.Driver import *
 from racecar_gym.envs import gym_api
 import gymnasium as gym
 from time import sleep
 
-env = gym.make('SingleAgentAustria-v0', render_mode='human')
+from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper
+from Agents.wrappers import FlattenActionWrapper
 
-driver = HitTheGasDriver(env)
+scenario = str(Path(__file__).resolve().parent / 'scenarios' / 'austria.yml')
+env = gym.make('SingleAgentRaceEnv-v0', scenario=scenario, render_mode='human')
 
-obs = env.reset(options=dict(mode='grid'))
+wrappers = [FlattenActionWrapper, SB3ObservationWrapper]
+driver = SB3Driver(env, PPO, wrappers)
+env = driver.env
+driver.load("models/ppo_model_w_collision.zip")
+
+obs, info = env.reset(options=dict(mode='grid'))
 done = False
+truncated = False
 t = 0
-while not done:
+while not (done or truncated):
     action = driver.act(obs)
     obs, rewards, done, truncated, states = env.step(action)
     sleep(0.01)

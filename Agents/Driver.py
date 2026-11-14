@@ -21,6 +21,29 @@ class Driver:
         """
         raise NotImplementedError()
 
+    def reset(self):
+        """
+        Reset the driver state.
+        """
+        raise NotImplementedError()
+
+    def save(self, path):
+        """
+        Save the driver model to a file.
+
+        :param path: path to save the model
+        """
+        raise NotImplementedError()
+
+
+    def load(self, path):
+        """
+        Load the driver model from a file.
+
+        :param path: path to load the model from
+        """
+        raise NotImplementedError()
+
 
 class DummyDriver(Driver):
     def act(self, obs):

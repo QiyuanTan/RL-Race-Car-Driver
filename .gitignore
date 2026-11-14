@@ -1,2 +1,6 @@
 racecar_gym
 .idea
+__pycache__/
+*.pyc
+.venv*/
+logs/
