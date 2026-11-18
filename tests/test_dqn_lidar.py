@@ -1,0 +1,128 @@
+"""Tests for the DQN + LiDAR pieces, using a small fake environment (no simulator needed).
+
+Run with:  python -m pytest tests/
+"""
+import os
+import sys
+
+import gymnasium as gym
+import numpy as np
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Agents.SB3Drivers import SB3Driver, SB3EvalDriver, dqn_wrappers  # noqa: E402
+from Agents.wrappers import DiscreteActionWrapper, LidarObservationWrapper  # noqa: E402
+
+N_RAYS = 1080
+
+
+class FakeRaceEnv(gym.Env):
+    """Same observation/action layout as racecar_gym (minus the camera, to stay small)."""
+
+    def __init__(self, with_lidar=True):
+        obs_spaces = {
+            'pose': gym.spaces.Box(-100, 100, (6,), np.float64),
+            'velocity': gym.spaces.Box(-14, 14, (6,), np.float64),
+            'time': gym.spaces.Box(0, 1, (), np.float32),
+        }
+        if with_lidar:
+            # identical to racecar_gym's lidar space
+            obs_spaces['lidar'] = gym.spaces.Box(0.25, 15.25, (N_RAYS,), np.float64)
+        self.observation_space = gym.spaces.Dict(obs_spaces)
+        self.action_space = gym.spaces.Dict({
+            'motor': gym.spaces.Box(-1, 1, (1,), np.float32),
+            'steering': gym.spaces.Box(-1, 1, (1,), np.float32),
+        })
+
+    def make_obs(self, lidar=None):
+        obs = {'pose': np.zeros(6), 'velocity': np.zeros(6), 'time': np.array(0.0, dtype=np.float32)}
+        if 'lidar' in self.observation_space.spaces:
+            obs['lidar'] = np.full(N_RAYS, 5.0) if lidar is None else np.asarray(lidar, dtype=np.float64)
+        return obs
+
+    def reset(self, seed=None, options=None):
+        return self.make_obs(), {}
+
+    def step(self, action):
+        return self.make_obs(), 0.0, False, False, {}
+
+
+def test_lidar_is_scaled_to_0_1_and_matches_the_space():
+    wrapper = LidarObservationWrapper(FakeRaceEnv())
+    scan = np.linspace(0.25, 15.25, N_RAYS)
+    out = wrapper.observation(FakeRaceEnv().make_obs(scan))
+    assert out['lidar'].dtype == np.float32 and out['lidar'].shape == (N_RAYS,)
+    assert out['lidar'][0] == pytest.approx(0.0) and out['lidar'][-1] == pytest.approx(1.0)
+    assert out['lidar'][N_RAYS // 2] == pytest.approx((scan[N_RAYS // 2] - 0.25) / 15.0, abs=1e-6)
+    assert wrapper.observation_space.contains(out)
+
+
+def test_lidar_bad_values_are_cleaned():
+    wrapper = LidarObservationWrapper(FakeRaceEnv())
+    scan = np.full(N_RAYS, 5.0)
+    scan[:4] = [np.nan, np.inf, -np.inf, 100.0]
+    out = wrapper.observation(FakeRaceEnv().make_obs(scan))['lidar']
+    assert np.all(np.isfinite(out))
+    assert out[0] == 0.0          # NaN -> treated as a wall (closest)
+    assert out[1] == 1.0          # +inf -> farthest
+    assert out[2] == 0.0          # -inf -> closest
+    assert out[3] == 1.0          # too far -> clipped
+
+
+def test_other_observation_keys_are_unchanged():
+    env = FakeRaceEnv()
+    obs = env.make_obs()
+    obs['pose'] = np.arange(6, dtype=np.float64)
+    out = LidarObservationWrapper(env).observation(obs)
+    assert np.array_equal(out['pose'], obs['pose'])
+    assert set(out) == set(obs)
+
+
+def test_missing_lidar_gives_a_clear_error():
+    with pytest.raises(KeyError, match='austria_lidar.yml'):
+        LidarObservationWrapper(FakeRaceEnv(with_lidar=False))
+
+
+def test_discrete_action_table():
+    wrapper = DiscreteActionWrapper(FakeRaceEnv())
+    assert wrapper.action_space.n == 15
+    # ID = motor_index * 5 + steering_index; motor (-0.5, 0, 0.5), steering (-1, -0.5, 0, 0.5, 1)
+    for action_id, (motor, steering) in [(0, (-0.5, -1.0)), (7, (0.0, 0.0)), (14, (0.5, 1.0))]:
+        action = wrapper.action(action_id)
+        assert action['motor'][0] == motor and action['steering'][0] == steering
+
+
+@pytest.mark.parametrize('lidar', [False, True])
+def test_eval_driver_matches_training_wrappers(lidar):
+    """SB3EvalDriver on the raw env must give the same action as model + wrappers in training."""
+    from stable_baselines3 import DQN
+    env = FakeRaceEnv(with_lidar=lidar)
+    driver = SB3Driver(env, model_class=DQN, wrappers=dqn_wrappers(lidar), buffer_size=100, seed=0)
+    eval_driver = SB3EvalDriver(driver)
+    rng = np.random.default_rng(0)
+    for _ in range(5):
+        raw = env.make_obs(rng.uniform(0.25, 15.0, N_RAYS) if lidar else None)
+        raw['pose'] = rng.normal(size=6)
+        wrapped = raw
+        for wrapper_class in dqn_wrappers(lidar):        # rebuild the training preprocessing by hand
+            if issubclass(wrapper_class, gym.ObservationWrapper):
+                wrapped = driver_wrapper(driver, wrapper_class).observation(wrapped)
+        action_id, _ = driver.model.predict(wrapped, deterministic=True)
+        expected = DiscreteActionWrapper(env).action(action_id)
+        got = eval_driver.act(raw)
+        assert set(got) == {'motor', 'steering'}
+        assert got['motor'][0] == expected['motor'][0] and got['steering'][0] == expected['steering'][0]
+    if lidar:
+        assert driver.model.observation_space['lidar'].shape == (N_RAYS,)
+    else:
+        assert 'lidar' not in driver.model.observation_space.spaces
+
+
+def driver_wrapper(driver, wrapper_class):
+    """Find the wrapper instance of a given class inside the driver's wrapped env."""
+    env = driver.env
+    while isinstance(env, gym.Wrapper):
+        if type(env) is wrapper_class:
+            return env
+        env = env.env
+    raise LookupError(wrapper_class)

@@ -45,6 +45,44 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         return {key: value.copy() for key, value in self._actions[int(action)].items()}
 
 
+class LidarObservationWrapper(gym.ObservationWrapper):
+    """Clean and scale the raw LiDAR scan so it can be fed to the policy as a vector.
+
+    racecar_gym's `lidar` observation is Box(low=0.25, high=15.25, shape=(1080,), float64),
+    distances in metres. The sensor itself clips readings to [0.25, 15.0], so the space's
+    upper bound is never reached; we still scale with the space bounds so the output always
+    lies inside the new observation space.
+
+    Output: float32 in [0, 1], computed as (distance - low) / (high - low).
+    NaN is treated as the closest distance (a wall, the safe assumption), +inf as the farthest.
+    All other observation keys pass through unchanged.
+    """
+
+    def __init__(self, env, key="lidar"):
+        super().__init__(env)
+        observation_space = env.observation_space
+        if key not in observation_space.spaces:
+            raise KeyError(
+                f"observation has no '{key}' key; use a scenario whose sensors include "
+                f"'{key}', e.g. scenarios/austria_lidar.yml"
+            )
+        space = observation_space[key]
+        self._key = key
+        self._low = float(np.min(space.low))
+        self._high = float(np.max(space.high))
+        new_spaces = dict(observation_space.spaces)
+        new_spaces[key] = gym.spaces.Box(low=0.0, high=1.0, shape=space.shape, dtype=np.float32)
+        self.observation_space = gym.spaces.Dict(new_spaces)
+
+    def observation(self, obs):
+        scan = np.asarray(obs[self._key], dtype=np.float64)
+        scan = np.nan_to_num(scan, nan=self._low, posinf=self._high, neginf=self._low)
+        scan = np.clip(scan, self._low, self._high)
+        observation = dict(obs)
+        observation[self._key] = ((scan - self._low) / (self._high - self._low)).astype(np.float32)
+        return observation
+
+
 class FlattenActionWrapper(gym.ActionWrapper):
     """Expose a single agent's Dict of Box actions as one flat Box.
 

@@ -1,5 +1,6 @@
 from Agents.Driver import Driver
-from Agents.wrappers import FlattenActionWrapper
+from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper, LidarObservationWrapper
+import gymnasium as gym
 from gymnasium import ObservationWrapper, spaces
 import numpy as np
 from functools import partial
@@ -34,6 +35,34 @@ class SB3Driver(Driver):
 
     def act(self, obs):
         action, _states = self.model.predict(obs)
+        return action
+
+    def reset(self):
+        """SB3 feed-forward policies keep no state between steps, so there is nothing to clear."""
+        pass
+
+    def act_raw(self, obs, deterministic=True):
+        """Raw environment observation -> raw environment action (e.g. {'motor', 'steering'}).
+
+        Runs the observation through the same observation wrappers used in training, asks the
+        model for an action, then decodes it with the same action wrappers (for DQN: action ID
+        -> motor/steering). Use this when stepping the unwrapped environment, e.g. from
+        evaluate_baseline.run_episode. Only works for a single (non-vectorized) environment.
+        """
+        if isinstance(self.env, VecEnv):
+            raise TypeError('act_raw needs a single environment, not a vectorized one')
+        chain = []                       # outermost wrapper first
+        env = self.env
+        while isinstance(env, gym.Wrapper):
+            chain.append(env)
+            env = env.env
+        for wrapper in reversed(chain):  # observations: innermost wrapper first
+            if isinstance(wrapper, ObservationWrapper):
+                obs = wrapper.observation(obs)
+        action, _states = self.model.predict(obs, deterministic=deterministic)
+        for wrapper in chain:            # actions: outermost wrapper first
+            if isinstance(wrapper, gym.ActionWrapper):
+                action = wrapper.action(action)
         return action
 
     def apply_wrappers(self, env):
@@ -76,3 +105,31 @@ class SB3ObservationWrapper(ObservationWrapper):
         for key, space in self._scalar_spaces.items():
             observation[key] = np.asarray(obs[key], dtype=space.dtype).reshape(1)
         return observation
+
+
+def dqn_wrappers(lidar=False):
+    """Wrapper list for DQN, shared by training and evaluation so both preprocess identically.
+
+    Base DQN: discrete actions + SB3 observation fix.
+    lidar=True: additionally cleans/scales the raw `lidar` scan (the scenario must include it).
+    """
+    if lidar:
+        return [DiscreteActionWrapper, LidarObservationWrapper, SB3ObservationWrapper]
+    return [DiscreteActionWrapper, SB3ObservationWrapper]
+
+
+class SB3EvalDriver(Driver):
+    """Adapter so a trained SB3Driver can be evaluated like FollowTheGapDriver.
+
+    act(raw obs) -> {'motor': array([m]), 'steering': array([s])}, which is what
+    evaluate_baseline.run_episode expects. Actions are greedy (deterministic=True).
+    """
+
+    def __init__(self, sb3_driver):
+        self.sb3_driver = sb3_driver
+
+    def reset(self):
+        self.sb3_driver.reset()
+
+    def act(self, obs):
+        return self.sb3_driver.act_raw(obs, deterministic=True)

@@ -91,6 +91,30 @@ For 128 × 128 RGB `uint8` images, current and next images alone occupy about
 0.92 GiB at this buffer size; other observations and training require additional
 memory.
 
+### DQN with LiDAR observations
+
+`train.py` takes command-line options. Without options it still trains base DQN for 1M steps
+and saves `models/dqn_model.zip`. `--lidar` uses `scenarios/austria_lidar.yml` (same as
+`austria.yml` plus the `lidar` sensor) and adds `LidarObservationWrapper`, which scales the
+1080 distances (metres) to `[0, 1]` float32. Actions, reward, termination and budget are
+unchanged, so the two variants differ only in the LiDAR input.
+
+```bash
+python train.py --timesteps 200000 --seed 0 --save-path models/dqn_model
+python train.py --lidar --timesteps 200000 --seed 0 --save-path models/dqn_lidar_model
+```
+
+Evaluate with the same episode loop as the FTG baseline (`evaluate_baseline.run_episode`);
+seeds 100-109 match the FTG test seeds:
+
+```bash
+python evaluate_sb3.py --model models/dqn_model.zip --episodes 10 --seed 100 --workers 4
+python evaluate_sb3.py --model models/dqn_lidar_model.zip --lidar --episodes 10 --seed 100 --workers 4
+```
+
+The DQN scenarios end an episode at the first wall contact, so `collisions` is 0 or 1 and
+`progress` shows how far the car got.
+
 To view training metrics, run:
 
 ```bash
