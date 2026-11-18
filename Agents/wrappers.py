@@ -3,7 +3,7 @@ from typing import Dict
 import gymnasium as gym
 import numpy as np
 from gymnasium.spaces.utils import flatten, flatten_space, unflatten
-
+"""DQN+ lidar (compare to dqn baseline)add 3 new classes: DiscreteActionWrapper, StartModeWrapper, ActionRepeatWrapper, LidarObservationWrapper"""
 
 class DiscreteActionWrapper(gym.ActionWrapper):
     """Map discrete IDs to absolute motor and steering commands.

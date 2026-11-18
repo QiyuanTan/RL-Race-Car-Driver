@@ -52,10 +52,10 @@ class EvalCheckpoint(BaseCallback):
 
 
 class ResumableCheckpoint(BaseCallback):
-    """Every `every` steps, save model + replay buffer so training can be resumed.
+    """Every steps, save model + replay buffer so training can be resumed.
 
     Only the latest copy is kept: it is written to a temporary folder first and then moved into
-    place, so an interruption while saving never destroys the previous good copy.
+    place to avoid any interruptions
     """
 
     def __init__(self, folder, every, total_timesteps):
@@ -72,11 +72,11 @@ class ResumableCheckpoint(BaseCallback):
     def save(self):
         tmp = self.folder / 'tmp'
         tmp.mkdir(parents=True, exist_ok=True)
-        self.model.save(tmp / 'model')                         # weights, optimizer, step counters
-        self.model.save_replay_buffer(tmp / 'replay_buffer')   # not part of model.zip
+        self.model.save(tmp / 'model')  # weights, optimizer, step counters
+        self.model.save_replay_buffer(tmp / 'replay_buffer') # not part of model.zip
         (tmp / 'state.json').write_text(json.dumps(
             {'num_timesteps': self.num_timesteps, 'total_timesteps': self.total_timesteps}))
-        for name in ('model.zip', 'replay_buffer.pkl', 'state.json'):   # state.json last
+        for name in ('model.zip', 'replay_buffer.pkl', 'state.json'): # state.json last
             os.replace(tmp / name, self.folder / name)
         print(f'[checkpoint] resumable copy saved at step {self.num_timesteps} -> {self.folder}', flush=True)
 
@@ -115,7 +115,7 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
     demo_episodes=K (LiDAR only) first drives K episodes with FTG restricted to DQN's actions and
     puts them in the replay buffer, where they stay for the whole run (see Agents/demos.py).
     demo_laps=K instead keeps only demo episodes that complete a full lap, until K laps are kept.
-    Demo decisions are extra; total_timesteps still counts only DQN's own (online) decisions.
+    Demo decisions are extra; total_timesteps still counts only DQN's own decisions.
     """
     log_dir = REPO_ROOT / 'logs' / ('dqn_lidar' if lidar else 'dqn')
     folder = checkpoint_dir(save_path)
@@ -206,7 +206,7 @@ def train_sac(env, total_timesteps=10000, save_path='sac_model'):
 
 
 if __name__ == '__main__':
-    # With no arguments this trains base DQN for 1M steps -> models/dqn_model.zip, as before.
+    #with no arguments this trains base DQN for 1M steps -> models/dqn_model.zip
     parser = argparse.ArgumentParser(description='Train DQN (optionally with LiDAR observations).')
     parser.add_argument('--lidar', action='store_true', help='add the LiDAR scan to the observation')
     parser.add_argument('--timesteps', type=int, default=1_000_000)

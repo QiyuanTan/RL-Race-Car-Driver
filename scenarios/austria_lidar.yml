@@ -1,6 +1,6 @@
 # Same as austria.yml (the base DQN scenario) plus the `lidar` sensor.
-# Reward, termination and every other setting are unchanged so that base DQN and
-# DQN + LiDAR differ only in the observation.
+#reward, termination and every other setting are unchanged so that base DQN and
+#DQN + LiDAR differ only in the observation.
 world:
   name: austria
 agents:

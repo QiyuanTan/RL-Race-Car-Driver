@@ -40,29 +40,27 @@ class SB3Driver(Driver):
         return action
 
     def reset(self):
-        """SB3 feed-forward policies keep no state between steps, so there is nothing to clear."""
         pass
 
     def act_raw(self, obs, deterministic=True):
-        """Raw environment observation -> raw environment action (e.g. {'motor', 'steering'}).
-
-        Runs the observation through the same observation wrappers used in training, asks the
-        model for an action, then decodes it with the same action wrappers (for DQN: action ID
-        -> motor/steering). Use this when stepping the unwrapped environment, e.g. from
-        evaluate_baseline.run_episode. Only works for a single (non-vectorized) environment.
+        """Raw environment observation -> raw environment action.
+        Use this when stepping the unwrapped environment, e.g. from
+        evaluate_baseline.run_episode.
+        Only works for a single/non-vectorized) environment.
         """
         if isinstance(self.env, VecEnv):
             raise TypeError('act_raw needs a single environment, not a vectorized one')
-        chain = []                       # outermost wrapper first
+        chain = [] # outermost wrapper first
         env = self.env
         while isinstance(env, gym.Wrapper):
             chain.append(env)
             env = env.env
-        for wrapper in reversed(chain):  # observations: innermost wrapper first
+        for wrapper in reversed(chain):# obs: innermost wrapper first
             if isinstance(wrapper, ObservationWrapper):
                 obs = wrapper.observation(obs)
         action, _states = self.model.predict(obs, deterministic=deterministic)
-        for wrapper in chain:            # actions: outermost wrapper first
+
+        for wrapper in chain:# actions: outermost wrapper first
             if isinstance(wrapper, gym.ActionWrapper):
                 action = wrapper.action(action)
         return action
@@ -76,10 +74,8 @@ class SB3Driver(Driver):
         env = factory()
         env = self.apply_wrappers(env)
         return env
-
+"""Convert scalar Box entries in Dict observations to one-element vectors."""
 class SB3ObservationWrapper(ObservationWrapper):
-    """Convert scalar Box entries in Dict observations to one-element vectors."""
-
     def __init__(self, env):
         super().__init__(env)
         self._scalar_spaces = {}
@@ -108,7 +104,7 @@ class SB3ObservationWrapper(ObservationWrapper):
             observation[key] = np.asarray(obs[key], dtype=space.dtype).reshape(1)
         return observation
 
-
+    
 def dqn_wrappers(lidar=False, action_repeat=1):
     """Wrapper list for DQN, shared by training and evaluation so both preprocess identically.
 
@@ -126,10 +122,14 @@ def dqn_wrappers(lidar=False, action_repeat=1):
 
 
 class SB3EvalDriver(Driver):
-    """Adapter so a trained SB3Driver can be evaluated like FollowTheGapDriver.
+
+    """
+    DQN+ lidar (compare to dqn baseline)
+    Adapter so a trained SB3Driver can be evaluated like FollowTheGapDriver.
 
     act(raw obs) -> {'motor': array([m]), 'steering': array([s])}, which is what
-    evaluate_baseline.run_episode expects (it calls act once per simulator step).
+    evaluate_baseline.run_episode expects, it calls act once per simulator step.
+    
     Actions are greedy (deterministic=True). With action_repeat=N the model decides on steps
     0, N, 2N, ... and the same command is returned in between, exactly as in training.
     """

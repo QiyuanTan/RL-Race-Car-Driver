@@ -1,11 +1,9 @@
 """FTG demonstrations for DQN: prefill the replay buffer with laps driven by Follow-the-Gap.
 
 The demonstrator is FollowTheGapDriver restricted to what DQN can do: it decides through the same
-training wrappers (same action repeat, same LiDAR scaling) and each command is snapped to the
-nearest of DQN's discrete actions. So every demo transition is one DQN could have produced itself.
-
-Demo transitions are kept for the whole training run: DemoKeepingDictReplayBuffer never
-overwrites its first `keep` slots, and DQN's own transitions cycle through the rest.
+training wrapper(same action repeat,same lidar scaling)
+ and each command is snapped to the nearest of DQN's discrete actions. 
+ So every demo transition is one DQN could have produced itself.
 """
 import gymnasium as gym
 import numpy as np
@@ -24,8 +22,8 @@ class DemoKeepingDictReplayBuffer(DictReplayBuffer):
 
     def add(self, *args, **kwargs):
         super().add(*args, **kwargs)
-        if self.full and self.pos == 0:    # the parent just wrapped around to slot 0
-            self.pos = self.keep           # skip the demo slots
+        if self.full and self.pos == 0: # the parent just wrapped around to slot 0
+            self.pos = self.keep # skip the demo slots
 
 
 def find_wrapper(env, wrapper_class):
@@ -45,7 +43,8 @@ def nearest_action_id(actions, command):
 
 def drive_demo_episode(vec_env, ftg, discrete, lidar, seed):
     """Drive one episode with FTG snapped to DQN's actions. Returns (transitions, last info)."""
-    np.random.seed(seed)                     # LiDAR noise
+    #lidar noise
+    np.random.seed(seed)                    
     vec_env.seed(seed)
     vec_env.set_options({'mode': 'grid'})
     obs = vec_env.reset()
@@ -59,7 +58,7 @@ def drive_demo_episode(vec_env, ftg, discrete, lidar, seed):
         new_obs, rewards, dones, infos = vec_env.step(np.array([action_id]))
         done = bool(dones[0])
         next_obs = {key: value.copy() for key, value in new_obs.items()}
-        if done:   # the vec env already reset; the real last observation is in the info
+        if done:#the vec env already reset. the real last observation is in the info
             for key, value in infos[0]['terminal_observation'].items():
                 next_obs[key] = value[np.newaxis]
         transitions.append((obs, next_obs, np.array([action_id]), rewards, dones, infos))
@@ -71,14 +70,14 @@ def collect_ftg_demos(model, wrapped_env, episodes=0, laps=0, max_attempts=10,
                       seed_start=DEMO_SEED_START):
     """Fill the replay buffer with FTG demonstrations, driven from the grid start.
 
-    episodes=K: drive K episodes (seeds 1000, 1001, ...) and keep all of them.
-    laps=K:     try seeds 1000, 1001, ... and keep only episodes that complete a full lap,
-                until K laps are kept (at most max_attempts tries); failed tries are discarded.
-
-    model:       the DQN model (its .env is the vectorized training env, its replay buffer is filled)
+    episodes=K: drive K episodes (seeds 1000, 1001  ...) and keep all of them.
+    laps=K:     try seeds 1000, 1001 ... and keep only episodes that complete a full lap,
+                    until K laps are kept (at most max_attempts tries)
+                  failed tries are discarded.
+    model:       the DQN model
     wrapped_env: the training wrapper chain (SB3Driver.env), used to read the action table and
                  the LiDAR scaling
-    Returns a summary dict for config.json.
+    returns a summary dict for config.json.
     """
     discrete = find_wrapper(wrapped_env, DiscreteActionWrapper)
     try:
@@ -86,7 +85,8 @@ def collect_ftg_demos(model, wrapped_env, episodes=0, laps=0, max_attempts=10,
     except LookupError:
         raise ValueError('FTG demonstrations need the LiDAR scan: use --lidar') from None
 
-    vec_env = model.env           # DummyVecEnv (+ VecTransposeImage), exactly what DQN trains on
+    vec_env = model.env   
+     # DummyVecEnv (+ VecTransposeImage), exactly what DQN trains on
     buffer = model.replay_buffer
     ftg = FollowTheGapDriver()
     summary = {'mode': 'laps' if laps else 'episodes', 'episodes': 0, 'seeds': [], 'decisions': 0,

@@ -1,5 +1,4 @@
-"""Tests for the DQN + LiDAR pieces, using a small fake environment (no simulator needed).
-
+"""Tests for the DQN + LiDAR pieces
 Run with:  python -m pytest tests/
 """
 import os
@@ -15,9 +14,8 @@ from Agents.wrappers import DiscreteActionWrapper, LidarObservationWrapper  # no
 
 N_RAYS = 1080
 
-
+"""Same observation/action layout as racecar_gym (minus the camera, to stay small)."""
 class FakeRaceEnv(gym.Env):
-    """Same observation/action layout as racecar_gym (minus the camera, to stay small)."""
 
     def __init__(self, with_lidar=True):
         obs_spaces = {
@@ -25,6 +23,7 @@ class FakeRaceEnv(gym.Env):
             'velocity': gym.spaces.Box(-14, 14, (6,), np.float64),
             'time': gym.spaces.Box(0, 1, (), np.float32),
         }
+
         if with_lidar:
             # identical to racecar_gym's lidar space
             obs_spaces['lidar'] = gym.spaces.Box(0.25, 15.25, (N_RAYS,), np.float64)
@@ -41,6 +40,7 @@ class FakeRaceEnv(gym.Env):
         return obs
 
     def reset(self, seed=None, options=None):
+
         return self.make_obs(), {}
 
     def step(self, action):
@@ -51,6 +51,7 @@ def test_lidar_is_scaled_to_0_1_and_matches_the_space():
     wrapper = LidarObservationWrapper(FakeRaceEnv())
     scan = np.linspace(0.25, 15.25, N_RAYS)
     out = wrapper.observation(FakeRaceEnv().make_obs(scan))
+
     assert out['lidar'].dtype == np.float32 and out['lidar'].shape == (N_RAYS,)
     assert out['lidar'][0] == pytest.approx(0.0) and out['lidar'][-1] == pytest.approx(1.0)
     assert out['lidar'][N_RAYS // 2] == pytest.approx((scan[N_RAYS // 2] - 0.25) / 15.0, abs=1e-6)
@@ -63,10 +64,15 @@ def test_lidar_bad_values_are_cleaned():
     scan[:4] = [np.nan, np.inf, -np.inf, 100.0]
     out = wrapper.observation(FakeRaceEnv().make_obs(scan))['lidar']
     assert np.all(np.isfinite(out))
-    assert out[0] == 0.0          # NaN -> treated as a wall (closest)
-    assert out[1] == 1.0          # +inf -> farthest
-    assert out[2] == 0.0          # -inf -> closest
-    assert out[3] == 1.0          # too far -> clipped
+    """assert out[0]means NaN, treated as a wall(clossest)
+    out[1]means +inf, treated as farthest
+    out[2]means -inf, treated as closest
+    out[3]means too far, treated as clipped
+    """
+    assert out[0] == 0.0          
+    assert out[1] == 1.0          
+    assert out[2] == 0.0          
+    assert out[3] == 1.0         
 
 
 def test_other_observation_keys_are_unchanged():
@@ -86,15 +92,15 @@ def test_missing_lidar_gives_a_clear_error():
 def test_discrete_action_table():
     wrapper = DiscreteActionWrapper(FakeRaceEnv())
     assert wrapper.action_space.n == 15
-    # ID = motor_index * 5 + steering_index; motor (-0.5, 0, 0.5), steering (-1, -0.5, 0, 0.5, 1)
+    #ID = motor_index*5 + steering_index
+    #motor (-0.5, 0, 0.5), steering (-1, -0.5, 0, 0.5, 1)
     for action_id, (motor, steering) in [(0, (-0.5, -1.0)), (7, (0.0, 0.0)), (14, (0.5, 1.0))]:
         action = wrapper.action(action_id)
         assert action['motor'][0] == motor and action['steering'][0] == steering
 
-
+"""SB3EvalDriver on the raw env must give the same action as model + wrappers in training."""
 @pytest.mark.parametrize('lidar', [False, True])
 def test_eval_driver_matches_training_wrappers(lidar):
-    """SB3EvalDriver on the raw env must give the same action as model + wrappers in training."""
     from stable_baselines3 import DQN
     env = FakeRaceEnv(with_lidar=lidar)
     driver = SB3Driver(env, model_class=DQN, wrappers=dqn_wrappers(lidar), buffer_size=100, seed=0)
@@ -104,7 +110,8 @@ def test_eval_driver_matches_training_wrappers(lidar):
         raw = env.make_obs(rng.uniform(0.25, 15.0, N_RAYS) if lidar else None)
         raw['pose'] = rng.normal(size=6)
         wrapped = raw
-        for wrapper_class in dqn_wrappers(lidar):        # rebuild the training preprocessing by hand
+        for wrapper_class in dqn_wrappers(lidar): 
+             # rebuild the training preprocessing by hand
             if issubclass(wrapper_class, gym.ObservationWrapper):
                 wrapped = driver_wrapper(driver, wrapper_class).observation(wrapped)
         action_id, _ = driver.model.predict(wrapped, deterministic=True)
@@ -117,9 +124,9 @@ def test_eval_driver_matches_training_wrappers(lidar):
     else:
         assert 'lidar' not in driver.model.observation_space.spaces
 
-
+"""Find the wrapper instance of a given class inside the driver's wrapped env."""
 def driver_wrapper(driver, wrapper_class):
-    """Find the wrapper instance of a given class inside the driver's wrapped env."""
+    
     env = driver.env
     while isinstance(env, gym.Wrapper):
         if type(env) is wrapper_class:
@@ -127,9 +134,9 @@ def driver_wrapper(driver, wrapper_class):
         env = env.env
     raise LookupError(wrapper_class)
 
-
+"""Fake env that records the actions it receives, gives reward 1 per step and ends after `length` steps."""
 class CountingEnv(FakeRaceEnv):
-    """Fake env that records the actions it receives, gives reward 1 per step and ends after `length` steps."""
+    
 
     def __init__(self, length=10):
         super().__init__(with_lidar=False)
@@ -152,7 +159,8 @@ def test_action_repeat_holds_action_and_adds_rewards():
     obs, reward, done, truncated, info = env.step('A')
     assert env.env.received == ['A'] * 4 and reward == 4.0 and not done
     env.step('B')
-    obs, reward, done, truncated, info = env.step('C')      # only 2 steps left in the episode
+    obs, reward, done, truncated, info = env.step('C')      
+    # only 2 steps left in the episode
     assert env.env.received[-2:] == ['C', 'C'] and reward == 2.0 and done and info['step'] == 10
 
 
@@ -171,9 +179,10 @@ def test_eval_driver_decides_every_n_steps():
     driver = SB3EvalDriver(FakeSB3Driver(), action_repeat=4)
     driver.reset()
     motors = [driver.act({})['motor'][0] for _ in range(9)]
-    assert motors == [1, 1, 1, 1, 2, 2, 2, 2, 3]            # new decision on steps 0, 4, 8
+    assert motors == [1, 1, 1, 1, 2, 2, 2, 2, 3]            
+    # new decision on steps 0, 4, 8
     driver.reset()
-    assert driver.act({})['motor'][0] == 4                  # reset starts a fresh decision
+    assert driver.act({})['motor'][0] == 4            
 
 
 def test_dqn_wrappers_put_action_repeat_innermost():
@@ -185,7 +194,8 @@ def test_dqn_wrappers_put_action_repeat_innermost():
     while isinstance(env, gym.Wrapper):
         chain.append(type(env))
         env = env.env
-    assert chain[-1] is ActionRepeatWrapper                  # innermost: repeats motor/steering
+    assert chain[-1] is ActionRepeatWrapper                  
+    # innermost: repeats motor/steering
     assert DiscreteActionWrapper in chain
 
 
@@ -200,7 +210,8 @@ def test_start_mode_wrapper_injects_reset_mode():
     env = StartModeWrapper(RecordingEnv(), mode='random')
     env.reset()
     assert env.env.last_options == {'mode': 'random'}
-    env.reset(options={'mode': 'grid'})                       # an explicit mode still wins
+    env.reset(options={'mode': 'grid'})                      
+     # an explicit mode still wins
     assert env.env.last_options == {'mode': 'grid'}
 
 
@@ -212,15 +223,16 @@ def test_demo_slots_are_never_overwritten():
     def add(value):
         obs = {'x': np.array([[value]], np.float32)}
         buffer.add(obs, obs, np.array([0]), np.array([0.0]), np.array([False]), [{}])
-
-    for demo in (-1, -2, -3):          # three demonstration transitions
+    #3d transitions
+    for demo in (-1, -2, -3):         
         add(demo)
     buffer.keep = 3
-    for own in range(1, 26):           # 25 of DQN's own transitions into the 7 remaining slots
+    #25 of DQN's own transitions into the 7 remaining slots
+    for own in range(1, 26):           
         add(own)
     stored = buffer.observations['x'][:, 0, 0].tolist()
-    assert stored[:3] == [-1, -2, -3]                        # demos still there
-    assert sorted(stored[3:]) == list(range(19, 26))         # the 7 newest own transitions
+    assert stored[:3] == [-1, -2, -3]  
+    assert sorted(stored[3:]) == list(range(19, 26)) 
     assert buffer.full and buffer.size() == 10
 
 
@@ -230,16 +242,18 @@ def test_nearest_action_id_matches_dqn_table():
     command = {'motor': np.array([0.31]), 'steering': np.array([-0.8])}
     action_id = nearest_action_id(actions, command)
     assert actions[action_id]['motor'][0] == 0.5 and actions[action_id]['steering'][0] == -1.0
-    assert action_id == 2 * 5 + 0                            # ID = motor_index * 5 + steering_index
+    assert action_id == 2 * 5 + 0  # ID = motor_index * 5 + steering_index
 
 
 def test_demo_laps_keeps_only_full_laps(monkeypatch):
     """Tries that crash are discarded; collection stops once enough full laps are kept."""
     import Agents.demos as demos
 
-    outcome = {1000: 1.0, 1001: 0.36, 1002: 0.54, 1003: 1.0, 1004: 1.0}   # seed -> progress reached
+    outcome = {1000: 1.0, 1001: 0.36, 1002: 0.54, 1003: 1.0, 1004: 1.0}   
+    # seed -> progress reached
 
     def fake_drive(vec_env, ftg, discrete, lidar, seed):
+
         lap = outcome[seed] >= 1.0
         info = {'lap': 2 if lap else 1, 'progress': 0.0 if lap else outcome[seed], 'time': 1.0}
         return [('transition', seed)] * 3, info
@@ -258,10 +272,12 @@ def test_demo_laps_keeps_only_full_laps(monkeypatch):
     monkeypatch.setattr(demos, 'drive_demo_episode', fake_drive)
     monkeypatch.setattr(demos, 'find_wrapper', lambda env, cls: None)
     model = FakeModel()
+
     summary = demos.collect_ftg_demos(model, None, laps=2)
     assert summary['seeds'] == [1000, 1003] and summary['laps_completed'] == 2
     assert [d['seed'] for d in summary['discarded']] == [1001, 1002]
-    assert {t[1] for t in model.replay_buffer.added} == {1000, 1003}          # failed tries not stored
+    assert {t[1] for t in model.replay_buffer.added} == {1000, 1003}          #dont storre failed tries
     assert summary['decisions'] == 6
+    
     with pytest.raises(RuntimeError, match='only 1 of 2'):
-        demos.collect_ftg_demos(FakeModel(), None, laps=2, max_attempts=2)    # 1000 ok, 1001 fails
+        demos.collect_ftg_demos(FakeModel(), None, laps=2, max_attempts=2)    
