@@ -231,3 +231,37 @@ def test_nearest_action_id_matches_dqn_table():
     action_id = nearest_action_id(actions, command)
     assert actions[action_id]['motor'][0] == 0.5 and actions[action_id]['steering'][0] == -1.0
     assert action_id == 2 * 5 + 0                            # ID = motor_index * 5 + steering_index
+
+
+def test_demo_laps_keeps_only_full_laps(monkeypatch):
+    """Tries that crash are discarded; collection stops once enough full laps are kept."""
+    import Agents.demos as demos
+
+    outcome = {1000: 1.0, 1001: 0.36, 1002: 0.54, 1003: 1.0, 1004: 1.0}   # seed -> progress reached
+
+    def fake_drive(vec_env, ftg, discrete, lidar, seed):
+        lap = outcome[seed] >= 1.0
+        info = {'lap': 2 if lap else 1, 'progress': 0.0 if lap else outcome[seed], 'time': 1.0}
+        return [('transition', seed)] * 3, info
+
+    class FakeBuffer:
+        def __init__(self):
+            self.added = []
+
+        def add(self, *transition):
+            self.added.append(transition)
+
+    class FakeModel:
+        env = None
+        replay_buffer = FakeBuffer()
+
+    monkeypatch.setattr(demos, 'drive_demo_episode', fake_drive)
+    monkeypatch.setattr(demos, 'find_wrapper', lambda env, cls: None)
+    model = FakeModel()
+    summary = demos.collect_ftg_demos(model, None, laps=2)
+    assert summary['seeds'] == [1000, 1003] and summary['laps_completed'] == 2
+    assert [d['seed'] for d in summary['discarded']] == [1001, 1002]
+    assert {t[1] for t in model.replay_buffer.added} == {1000, 1003}          # failed tries not stored
+    assert summary['decisions'] == 6
+    with pytest.raises(RuntimeError, match='only 1 of 2'):
+        demos.collect_ftg_demos(FakeModel(), None, laps=2, max_attempts=2)    # 1000 ok, 1001 fails

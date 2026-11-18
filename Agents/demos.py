@@ -43,13 +43,42 @@ def nearest_action_id(actions, command):
                key=lambda i: (abs(actions[i]['motor'][0] - motor), abs(actions[i]['steering'][0] - steering)))
 
 
-def collect_ftg_demos(model, wrapped_env, episodes, seed_start=DEMO_SEED_START):
-    """Drive `episodes` demo episodes from the grid start and add every transition to the buffer.
+def drive_demo_episode(vec_env, ftg, discrete, lidar, seed):
+    """Drive one episode with FTG snapped to DQN's actions. Returns (transitions, last info)."""
+    np.random.seed(seed)                     # LiDAR noise
+    vec_env.seed(seed)
+    vec_env.set_options({'mode': 'grid'})
+    obs = vec_env.reset()
+    ftg.reset()
+    transitions, done = [], False
+    while not done:
+        # FTG reads distances in metres: undo the 0-1 scaling of LidarObservationWrapper
+        scan = lidar._low + obs['lidar'][0].astype(np.float64) * (lidar._high - lidar._low)
+        command = ftg.act({'lidar': scan, 'velocity': obs['velocity'][0]})
+        action_id = nearest_action_id(discrete._actions, command)
+        new_obs, rewards, dones, infos = vec_env.step(np.array([action_id]))
+        done = bool(dones[0])
+        next_obs = {key: value.copy() for key, value in new_obs.items()}
+        if done:   # the vec env already reset; the real last observation is in the info
+            for key, value in infos[0]['terminal_observation'].items():
+                next_obs[key] = value[np.newaxis]
+        transitions.append((obs, next_obs, np.array([action_id]), rewards, dones, infos))
+        obs = new_obs
+    return transitions, infos[0]
+
+
+def collect_ftg_demos(model, wrapped_env, episodes=0, laps=0, max_attempts=10,
+                      seed_start=DEMO_SEED_START):
+    """Fill the replay buffer with FTG demonstrations, driven from the grid start.
+
+    episodes=K: drive K episodes (seeds 1000, 1001, ...) and keep all of them.
+    laps=K:     try seeds 1000, 1001, ... and keep only episodes that complete a full lap,
+                until K laps are kept (at most max_attempts tries); failed tries are discarded.
 
     model:       the DQN model (its .env is the vectorized training env, its replay buffer is filled)
     wrapped_env: the training wrapper chain (SB3Driver.env), used to read the action table and
                  the LiDAR scaling
-    Returns a summary dict (episodes, decisions, simulated steps, laps completed, progress).
+    Returns a summary dict for config.json.
     """
     discrete = find_wrapper(wrapped_env, DiscreteActionWrapper)
     try:
@@ -60,33 +89,31 @@ def collect_ftg_demos(model, wrapped_env, episodes, seed_start=DEMO_SEED_START):
     vec_env = model.env           # DummyVecEnv (+ VecTransposeImage), exactly what DQN trains on
     buffer = model.replay_buffer
     ftg = FollowTheGapDriver()
-    summary = {'episodes': episodes, 'seeds': [], 'decisions': 0, 'simulated_steps': 0,
-               'laps_completed': 0, 'progress': []}
-    for episode in range(episodes):
-        seed = seed_start + episode
-        np.random.seed(seed)                     # LiDAR noise
-        vec_env.seed(seed)
-        vec_env.set_options({'mode': 'grid'})
-        obs = vec_env.reset()
-        ftg.reset()
-        done = False
-        while not done:
-            # FTG reads distances in metres: undo the 0-1 scaling of LidarObservationWrapper
-            scan = lidar._low + obs['lidar'][0].astype(np.float64) * (lidar._high - lidar._low)
-            command = ftg.act({'lidar': scan, 'velocity': obs['velocity'][0]})
-            action_id = nearest_action_id(discrete._actions, command)
-            new_obs, rewards, dones, infos = vec_env.step(np.array([action_id]))
-            done = bool(dones[0])
-            next_obs = {key: value.copy() for key, value in new_obs.items()}
-            if done:   # the vec env already reset; the real last observation is in the info
-                for key, value in infos[0]['terminal_observation'].items():
-                    next_obs[key] = value[np.newaxis]
-            buffer.add(obs, next_obs, np.array([action_id]), rewards, dones, infos)
-            summary['decisions'] += 1
-            obs = new_obs
-        info = infos[0]
+    summary = {'mode': 'laps' if laps else 'episodes', 'episodes': 0, 'seeds': [], 'decisions': 0,
+               'simulated_steps': 0, 'laps_completed': 0, 'progress': [],
+               'discarded': [], 'simulated_steps_all_attempts': 0}
+    attempts = laps and max_attempts or episodes
+    for attempt in range(attempts):
+        seed = seed_start + attempt
+        transitions, info = drive_demo_episode(vec_env, ftg, discrete, lidar, seed)
+        lap_done = info['lap'] >= 2
+        progress = round(float(info['lap'] - 1 + info['progress']), 3)
+        sim_steps = int(round(info['time'] / 0.01))
+        summary['simulated_steps_all_attempts'] += sim_steps
+        if laps and not lap_done:
+            summary['discarded'].append({'seed': seed, 'progress': progress})
+            continue
+        for transition in transitions:
+            buffer.add(*transition)
+        summary['episodes'] += 1
         summary['seeds'].append(seed)
-        summary['simulated_steps'] += int(round(info['time'] / 0.01))
-        summary['laps_completed'] += int(info['lap'] >= 2)
-        summary['progress'].append(round(float(info['lap'] - 1 + info['progress']), 3))
+        summary['decisions'] += len(transitions)
+        summary['simulated_steps'] += sim_steps
+        summary['laps_completed'] += int(lap_done)
+        summary['progress'].append(progress)
+        if laps and summary['laps_completed'] == laps:
+            break
+    if laps and summary['laps_completed'] < laps:
+        raise RuntimeError(f"only {summary['laps_completed']} of {laps} demo laps completed in "
+                           f'{max_attempts} tries: {summary}')
     return summary

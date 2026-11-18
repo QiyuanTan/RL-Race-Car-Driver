@@ -89,7 +89,8 @@ def checkpoint_dir(save_path):
 
 def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_000,
               lidar=False, seed=None, eval_every=0, resume_every=0, resume=False,
-              action_repeat=1, target_update_interval=10_000, train_start='grid', demo_episodes=0):
+              action_repeat=1, target_update_interval=10_000, train_start='grid', demo_episodes=0,
+              demo_laps=0):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -113,13 +114,16 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
 
     demo_episodes=K (LiDAR only) first drives K episodes with FTG restricted to DQN's actions and
     puts them in the replay buffer, where they stay for the whole run (see Agents/demos.py).
+    demo_laps=K instead keeps only demo episodes that complete a full lap, until K laps are kept.
     Demo decisions are extra; total_timesteps still counts only DQN's own (online) decisions.
     """
     log_dir = REPO_ROOT / 'logs' / ('dqn_lidar' if lidar else 'dqn')
     folder = checkpoint_dir(save_path)
     if train_start != 'grid':
         env = StartModeWrapper(env, mode=train_start)   # training only, not part of dqn_wrappers
-    extra = {'replay_buffer_class': DemoKeepingDictReplayBuffer} if demo_episodes else {}
+    if demo_episodes and demo_laps:
+        raise ValueError('use either --demo-episodes or --demo-laps, not both')
+    extra = {'replay_buffer_class': DemoKeepingDictReplayBuffer} if (demo_episodes or demo_laps) else {}
     driver = SB3Driver(
         env, model_class=DQN, wrappers=dqn_wrappers(lidar, action_repeat), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
@@ -133,9 +137,10 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                                         'one is written every --resume-every steps')
             state = json.loads(state_file.read_text())
             config = json.loads((folder / 'config.json').read_text())
-            defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid', 'demo_episodes': 0}
+            defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid', 'demo_episodes': 0,
+                        'demo_laps': 0}
             for key, value in (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start),
-                               ('demo_episodes', demo_episodes)):
+                               ('demo_episodes', demo_episodes), ('demo_laps', demo_laps)):
                 if config.get(key, defaults[key]) != value:
                     raise ValueError(f'this run was started with {key}={config.get(key)}; '
                                      f'resume it with the same setting')
@@ -154,22 +159,24 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
         else:
             done = 0
             demos = None
-            if demo_episodes:
-                demos = collect_ftg_demos(driver.model, driver.env, demo_episodes)
+            if demo_episodes or demo_laps:
+                demos = collect_ftg_demos(driver.model, driver.env, episodes=demo_episodes, laps=demo_laps)
                 if demos['decisions'] >= buffer_size:
                     raise ValueError(f"{demos['decisions']} demo decisions do not fit in buffer_size "
                                      f'{buffer_size}; use fewer --demo-episodes')
                 driver.model.replay_buffer.keep = demos['decisions']
-                print(f"[demos] {demos['episodes']} FTG episodes, {demos['decisions']} decisions "
-                      f"({demos['simulated_steps']} simulated steps), laps completed "
-                      f"{demos['laps_completed']}/{demos['episodes']}, progress {demos['progress']}", flush=True)
+                print(f"[demos] kept {demos['episodes']} FTG episodes (seeds {demos['seeds']}), "
+                      f"{demos['decisions']} decisions ({demos['simulated_steps']} simulated steps), laps completed "
+                      f"{demos['laps_completed']}/{demos['episodes']}, progress {demos['progress']}; "
+                      f"discarded {demos['discarded']}", flush=True)
             folder.mkdir(parents=True, exist_ok=True)
             (folder / 'config.json').write_text(json.dumps({
                 'algorithm': 'DQN', 'lidar': lidar, 'scenario': os.path.basename(dqn_scenario(lidar)),
                 'total_timesteps': total_timesteps, 'seed': seed, 'buffer_size': buffer_size,
                 'action_repeat': action_repeat, 'target_update_interval': target_update_interval,
                 'simulated_steps': total_timesteps * action_repeat, 'train_start': train_start,
-                'online_decisions': total_timesteps, 'demo_episodes': demo_episodes, 'demos': demos,
+                'online_decisions': total_timesteps, 'demo_episodes': demo_episodes, 'demo_laps': demo_laps,
+                'demos': demos,
                 'eval_every': eval_every, 'resume_every': resume_every, 'save_path': str(save_path),
             }, indent=2))
 
@@ -216,6 +223,9 @@ if __name__ == '__main__':
                              '(evaluation always starts from the grid)')
     parser.add_argument('--demo-episodes', type=int, default=0,
                         help='prefill the replay buffer with N FTG demo episodes (LiDAR only, 0 = off)')
+    parser.add_argument('--demo-laps', type=int, default=0,
+                        help='like --demo-episodes, but keep only demo episodes that finish a lap, '
+                             'until N laps are kept (failed tries are discarded)')
     parser.add_argument('--eval-every', type=int, default=0,
                         help='save an evaluable model every N steps (0 = off)')
     parser.add_argument('--resume-every', type=int, default=0,
@@ -239,4 +249,4 @@ if __name__ == '__main__':
               buffer_size=args.buffer_size, lidar=args.lidar, seed=args.seed,
               eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume,
               action_repeat=args.action_repeat, target_update_interval=args.target_update_interval,
-              train_start=args.train_start, demo_episodes=args.demo_episodes)
+              train_start=args.train_start, demo_episodes=args.demo_episodes, demo_laps=args.demo_laps)

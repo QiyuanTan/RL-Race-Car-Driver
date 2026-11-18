@@ -135,6 +135,8 @@ restricted to DQN's discrete actions and the same action repeat (seeds 1000, 100
 demo transitions occupy the first slots of the buffer for the whole run; DQN's own transitions
 use the remaining `buffer_size - demo decisions` slots. `config.json` records the demo episodes,
 decisions and simulated steps next to `online_decisions` (DQN's own training decisions).
+`--demo-laps K` instead keeps only demo episodes that complete a full lap (failed tries are
+discarded, at most 10 tries); the discarded seeds are listed in `config.json`.
 
 Evaluate with the same episode loop as the FTG baseline (`evaluate_baseline.run_episode`);
 seeds 100-109 match the FTG test seeds:
