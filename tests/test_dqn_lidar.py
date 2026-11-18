@@ -126,3 +126,64 @@ def driver_wrapper(driver, wrapper_class):
             return env
         env = env.env
     raise LookupError(wrapper_class)
+
+
+class CountingEnv(FakeRaceEnv):
+    """Fake env that records the actions it receives, gives reward 1 per step and ends after `length` steps."""
+
+    def __init__(self, length=10):
+        super().__init__(with_lidar=False)
+        self.length = length
+
+    def reset(self, seed=None, options=None):
+        self.received = []
+        return self.make_obs(), {}
+
+    def step(self, action):
+        self.received.append(action)
+        done = len(self.received) >= self.length
+        return self.make_obs(), 1.0, done, False, {'step': len(self.received)}
+
+
+def test_action_repeat_holds_action_and_adds_rewards():
+    from Agents.wrappers import ActionRepeatWrapper
+    env = ActionRepeatWrapper(CountingEnv(length=10), repeat=4)
+    env.reset()
+    obs, reward, done, truncated, info = env.step('A')
+    assert env.env.received == ['A'] * 4 and reward == 4.0 and not done
+    env.step('B')
+    obs, reward, done, truncated, info = env.step('C')      # only 2 steps left in the episode
+    assert env.env.received[-2:] == ['C', 'C'] and reward == 2.0 and done and info['step'] == 10
+
+
+def test_eval_driver_decides_every_n_steps():
+    class FakeSB3Driver:
+        calls = 0
+
+        def reset(self):
+            pass
+
+        def act_raw(self, obs, deterministic=True):
+            FakeSB3Driver.calls += 1
+            return {'motor': np.array([FakeSB3Driver.calls], np.float32),
+                    'steering': np.array([0.0], np.float32)}
+
+    driver = SB3EvalDriver(FakeSB3Driver(), action_repeat=4)
+    driver.reset()
+    motors = [driver.act({})['motor'][0] for _ in range(9)]
+    assert motors == [1, 1, 1, 1, 2, 2, 2, 2, 3]            # new decision on steps 0, 4, 8
+    driver.reset()
+    assert driver.act({})['motor'][0] == 4                  # reset starts a fresh decision
+
+
+def test_dqn_wrappers_put_action_repeat_innermost():
+    from Agents.wrappers import ActionRepeatWrapper
+    driver = SB3Driver(CountingEnv(), model_class=__import__('stable_baselines3').DQN,
+                       wrappers=dqn_wrappers(False, action_repeat=4), buffer_size=100)
+    chain = []
+    env = driver.env
+    while isinstance(env, gym.Wrapper):
+        chain.append(type(env))
+        env = env.env
+    assert chain[-1] is ActionRepeatWrapper                  # innermost: repeats motor/steering
+    assert DiscreteActionWrapper in chain

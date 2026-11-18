@@ -45,6 +45,29 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         return {key: value.copy() for key, value in self._actions[int(action)].items()}
 
 
+class ActionRepeatWrapper(gym.Wrapper):
+    """Repeat each action for `repeat` simulator steps (0.01 s each); rewards are added up.
+
+    The policy then decides every `repeat` steps, e.g. repeat=4 -> 25 Hz, which matches the
+    LiDAR update rate. Stops early when the episode ends, and returns the last observation/info.
+    """
+
+    def __init__(self, env, repeat=4):
+        super().__init__(env)
+        if repeat < 1:
+            raise ValueError('repeat must be at least 1')
+        self.repeat = repeat
+
+    def step(self, action):
+        total_reward = 0.0
+        for _ in range(self.repeat):
+            obs, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += float(reward)
+            if terminated or truncated:
+                break
+        return obs, total_reward, terminated, truncated, info
+
+
 class LidarObservationWrapper(gym.ObservationWrapper):
     """Clean and scale the raw LiDAR scan so it can be fed to the policy as a vector.
 

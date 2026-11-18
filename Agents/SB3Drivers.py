@@ -1,5 +1,6 @@
 from Agents.Driver import Driver
-from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper, LidarObservationWrapper
+from Agents.wrappers import (FlattenActionWrapper, DiscreteActionWrapper, LidarObservationWrapper,
+                            ActionRepeatWrapper)
 import gymnasium as gym
 from gymnasium import ObservationWrapper, spaces
 import numpy as np
@@ -108,29 +109,44 @@ class SB3ObservationWrapper(ObservationWrapper):
         return observation
 
 
-def dqn_wrappers(lidar=False):
+def dqn_wrappers(lidar=False, action_repeat=1):
     """Wrapper list for DQN, shared by training and evaluation so both preprocess identically.
 
     Base DQN: discrete actions + SB3 observation fix.
     lidar=True: additionally cleans/scales the raw `lidar` scan (the scenario must include it).
+    action_repeat>1: each decision is held for that many simulator steps (innermost wrapper,
+    so it repeats the decoded motor/steering command).
     """
+    wrappers = [partial(ActionRepeatWrapper, repeat=action_repeat)] if action_repeat > 1 else []
+    wrappers.append(DiscreteActionWrapper)
     if lidar:
-        return [DiscreteActionWrapper, LidarObservationWrapper, SB3ObservationWrapper]
-    return [DiscreteActionWrapper, SB3ObservationWrapper]
+        wrappers.append(LidarObservationWrapper)
+    wrappers.append(SB3ObservationWrapper)
+    return wrappers
 
 
 class SB3EvalDriver(Driver):
     """Adapter so a trained SB3Driver can be evaluated like FollowTheGapDriver.
 
     act(raw obs) -> {'motor': array([m]), 'steering': array([s])}, which is what
-    evaluate_baseline.run_episode expects. Actions are greedy (deterministic=True).
+    evaluate_baseline.run_episode expects (it calls act once per simulator step).
+    Actions are greedy (deterministic=True). With action_repeat=N the model decides on steps
+    0, N, 2N, ... and the same command is returned in between, exactly as in training.
     """
 
-    def __init__(self, sb3_driver):
+    def __init__(self, sb3_driver, action_repeat=1):
         self.sb3_driver = sb3_driver
+        self.action_repeat = action_repeat
+        self._steps = 0
+        self._action = None
 
     def reset(self):
         self.sb3_driver.reset()
+        self._steps = 0
+        self._action = None
 
     def act(self, obs):
-        return self.sb3_driver.act_raw(obs, deterministic=True)
+        if self._steps % self.action_repeat == 0:
+            self._action = self.sb3_driver.act_raw(obs, deterministic=True)
+        self._steps += 1
+        return {key: value.copy() for key, value in self._action.items()}

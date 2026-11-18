@@ -87,7 +87,8 @@ def checkpoint_dir(save_path):
 
 
 def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_000,
-              lidar=False, seed=None, eval_every=0, resume_every=0, resume=False):
+              lidar=False, seed=None, eval_every=0, resume_every=0, resume=False,
+              action_repeat=1, target_update_interval=10_000):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -101,12 +102,17 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
         resume_every: resume/ model + replay buffer, latest copy only
     resume=True continues from resume/ with the same total_timesteps plan, so the step count and
     the exploration schedule carry on where they stopped.
+
+    action_repeat=N holds each decision for N simulator steps. SB3 then counts decisions, so
+    total_timesteps, buffer_size and target_update_interval are all in decisions
+    (simulated time = decisions * N * 0.01 s).
     """
     log_dir = REPO_ROOT / 'logs' / ('dqn_lidar' if lidar else 'dqn')
     folder = checkpoint_dir(save_path)
     driver = SB3Driver(
-        env, model_class=DQN, wrappers=dqn_wrappers(lidar), verbose=1,
+        env, model_class=DQN, wrappers=dqn_wrappers(lidar, action_repeat), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
+        target_update_interval=target_update_interval,
     )
     try:
         if resume:
@@ -115,6 +121,11 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                 raise FileNotFoundError(f'no resumable checkpoint in {state_file.parent}; '
                                         'one is written every --resume-every steps')
             state = json.loads(state_file.read_text())
+            config = json.loads((folder / 'config.json').read_text())
+            for key, value in (('lidar', lidar), ('action_repeat', action_repeat)):
+                if config.get(key, False if key == 'lidar' else 1) != value:
+                    raise ValueError(f'this run was started with {key}={config.get(key)}; '
+                                     f'resume it with the same setting')
             if state['total_timesteps'] != total_timesteps:
                 raise ValueError(f"the checkpoint belongs to a {state['total_timesteps']}-step plan; "
                                  f"pass --timesteps {state['total_timesteps']} to resume it")
@@ -133,6 +144,8 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             (folder / 'config.json').write_text(json.dumps({
                 'algorithm': 'DQN', 'lidar': lidar, 'scenario': os.path.basename(dqn_scenario(lidar)),
                 'total_timesteps': total_timesteps, 'seed': seed, 'buffer_size': buffer_size,
+                'action_repeat': action_repeat, 'target_update_interval': target_update_interval,
+                'simulated_steps': total_timesteps * action_repeat,
                 'eval_every': eval_every, 'resume_every': resume_every, 'save_path': str(save_path),
             }, indent=2))
 
@@ -170,6 +183,10 @@ if __name__ == '__main__':
                         help='default: models/dqn_model, or models/dqn_lidar_model with --lidar')
     parser.add_argument('--buffer-size', type=int, default=10_000)
     parser.add_argument('--seed', type=int, default=None, help='SB3 seed (use the same one for both variants)')
+    parser.add_argument('--action-repeat', type=int, default=1,
+                        help='hold each decision for N simulator steps (1 = off, 4 = 25 Hz like the LiDAR)')
+    parser.add_argument('--target-update-interval', type=int, default=10_000,
+                        help='DQN target network update interval, in decisions (SB3 default 10000)')
     parser.add_argument('--eval-every', type=int, default=0,
                         help='save an evaluable model every N steps (0 = off)')
     parser.add_argument('--resume-every', type=int, default=0,
@@ -191,4 +208,5 @@ if __name__ == '__main__':
     env = gym_api.SingleAgentRaceEnv(scenario=dqn_scenario(args.lidar), render_mode='rgb_array_birds_eye')
     train_dqn(env, total_timesteps=args.timesteps, save_path=save_path,
               buffer_size=args.buffer_size, lidar=args.lidar, seed=args.seed,
-              eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume)
+              eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume,
+              action_repeat=args.action_repeat, target_update_interval=args.target_update_interval)

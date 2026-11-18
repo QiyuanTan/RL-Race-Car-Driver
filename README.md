@@ -119,6 +119,13 @@ python train.py --timesteps 200000 --seed 0 --save-path models/dqn_model --eval-
 python train.py --timesteps 200000 --seed 0 --save-path models/dqn_model --eval-every 20000 --resume-every 100000 --resume
 ```
 
+`--action-repeat N` holds each DQN decision for N simulator steps (N=4 -> 25 Hz, the LiDAR
+update rate). SB3 then counts decisions, so `--timesteps`, `--buffer-size` and
+`--target-update-interval` are in decisions; `config.json` also records `simulated_steps`.
+Evaluate such a model with the same `--action-repeat` (checked against `config.json`).
+Smoothness is measured per simulator step, so it is only comparable between runs with the
+same action repeat.
+
 Evaluate with the same episode loop as the FTG baseline (`evaluate_baseline.run_episode`);
 seeds 100-109 match the FTG test seeds:
 
