@@ -126,6 +126,10 @@ Evaluate such a model with the same `--action-repeat` (checked against `config.j
 Smoothness is measured per simulator step, so it is only comparable between runs with the
 same action repeat.
 
+`--train-start random` starts each training episode at a random point of the track
+(racecar_gym's `random` reset mode, facing forward), so later sections such as the hairpin are
+practised too. Evaluation always starts from the grid. Recorded as `train_start` in `config.json`.
+
 Evaluate with the same episode loop as the FTG baseline (`evaluate_baseline.run_episode`);
 seeds 100-109 match the FTG test seeds:
 

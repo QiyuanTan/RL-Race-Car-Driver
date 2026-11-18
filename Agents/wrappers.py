@@ -45,6 +45,24 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         return {key: value.copy() for key, value in self._actions[int(action)].items()}
 
 
+class StartModeWrapper(gym.Wrapper):
+    """Training only: start each episode with racecar_gym's reset mode, e.g. 'random'.
+
+    'random' puts the car at a random point on the track centre line, facing forward, so the
+    agent also practises later parts of the track (such as the hairpin) instead of always
+    starting from the grid. An explicit options={'mode': ...} passed to reset() still wins.
+    """
+
+    def __init__(self, env, mode='grid'):
+        super().__init__(env)
+        self.mode = mode
+
+    def reset(self, *, seed=None, options=None):
+        if options is None or 'mode' not in options:
+            options = dict(options or {}, mode=self.mode)
+        return self.env.reset(seed=seed, options=options)
+
+
 class ActionRepeatWrapper(gym.Wrapper):
     """Repeat each action for `repeat` simulator steps (0.01 s each); rewards are added up.
 

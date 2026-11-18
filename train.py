@@ -5,7 +5,7 @@ from functools import partial
 from pathlib import Path
 
 from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper, dqn_wrappers
-from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper
+from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper, StartModeWrapper
 from stable_baselines3 import PPO, DQN, SAC
 from stable_baselines3.common.callbacks import BaseCallback
 from racecar_gym.envs import gym_api
@@ -88,7 +88,7 @@ def checkpoint_dir(save_path):
 
 def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_000,
               lidar=False, seed=None, eval_every=0, resume_every=0, resume=False,
-              action_repeat=1, target_update_interval=10_000):
+              action_repeat=1, target_update_interval=10_000, train_start='grid'):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -106,9 +106,14 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
     action_repeat=N holds each decision for N simulator steps. SB3 then counts decisions, so
     total_timesteps, buffer_size and target_update_interval are all in decisions
     (simulated time = decisions * N * 0.01 s).
+
+    train_start='random' starts training episodes at random points of the track (racecar_gym's
+    'random' reset mode). Evaluation (evaluate_sb3.py) always starts from the grid.
     """
     log_dir = REPO_ROOT / 'logs' / ('dqn_lidar' if lidar else 'dqn')
     folder = checkpoint_dir(save_path)
+    if train_start != 'grid':
+        env = StartModeWrapper(env, mode=train_start)   # training only, not part of dqn_wrappers
     driver = SB3Driver(
         env, model_class=DQN, wrappers=dqn_wrappers(lidar, action_repeat), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
@@ -122,8 +127,9 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                                         'one is written every --resume-every steps')
             state = json.loads(state_file.read_text())
             config = json.loads((folder / 'config.json').read_text())
-            for key, value in (('lidar', lidar), ('action_repeat', action_repeat)):
-                if config.get(key, False if key == 'lidar' else 1) != value:
+            defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid'}
+            for key, value in (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start)):
+                if config.get(key, defaults[key]) != value:
                     raise ValueError(f'this run was started with {key}={config.get(key)}; '
                                      f'resume it with the same setting')
             if state['total_timesteps'] != total_timesteps:
@@ -145,7 +151,7 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                 'algorithm': 'DQN', 'lidar': lidar, 'scenario': os.path.basename(dqn_scenario(lidar)),
                 'total_timesteps': total_timesteps, 'seed': seed, 'buffer_size': buffer_size,
                 'action_repeat': action_repeat, 'target_update_interval': target_update_interval,
-                'simulated_steps': total_timesteps * action_repeat,
+                'simulated_steps': total_timesteps * action_repeat, 'train_start': train_start,
                 'eval_every': eval_every, 'resume_every': resume_every, 'save_path': str(save_path),
             }, indent=2))
 
@@ -187,6 +193,9 @@ if __name__ == '__main__':
                         help='hold each decision for N simulator steps (1 = off, 4 = 25 Hz like the LiDAR)')
     parser.add_argument('--target-update-interval', type=int, default=10_000,
                         help='DQN target network update interval, in decisions (SB3 default 10000)')
+    parser.add_argument('--train-start', choices=['grid', 'random'], default='grid',
+                        help="where training episodes start; 'random' = random point on the track "
+                             '(evaluation always starts from the grid)')
     parser.add_argument('--eval-every', type=int, default=0,
                         help='save an evaluable model every N steps (0 = off)')
     parser.add_argument('--resume-every', type=int, default=0,
@@ -209,4 +218,5 @@ if __name__ == '__main__':
     train_dqn(env, total_timesteps=args.timesteps, save_path=save_path,
               buffer_size=args.buffer_size, lidar=args.lidar, seed=args.seed,
               eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume,
-              action_repeat=args.action_repeat, target_update_interval=args.target_update_interval)
+              action_repeat=args.action_repeat, target_update_interval=args.target_update_interval,
+              train_start=args.train_start)

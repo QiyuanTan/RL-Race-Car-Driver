@@ -187,3 +187,18 @@ def test_dqn_wrappers_put_action_repeat_innermost():
         env = env.env
     assert chain[-1] is ActionRepeatWrapper                  # innermost: repeats motor/steering
     assert DiscreteActionWrapper in chain
+
+
+def test_start_mode_wrapper_injects_reset_mode():
+    from Agents.wrappers import StartModeWrapper
+
+    class RecordingEnv(FakeRaceEnv):
+        def reset(self, seed=None, options=None):
+            self.last_options = options
+            return super().reset(seed=seed, options=options)
+
+    env = StartModeWrapper(RecordingEnv(), mode='random')
+    env.reset()
+    assert env.env.last_options == {'mode': 'random'}
+    env.reset(options={'mode': 'grid'})                       # an explicit mode still wins
+    assert env.env.last_options == {'mode': 'grid'}
