@@ -1,0 +1,133 @@
+{
+  "model": "models/dqn_lidar_ar4.zip",
+  "lidar": true,
+  "action_repeat": 4,
+  "scenario": "scenarios/austria_lidar.yml",
+  "summary": {
+    "env": "austria_lidar.yml",
+    "seeds": [
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108,
+      109
+    ],
+    "laps_completed": "0/10",
+    "collision_free_laps": 0,
+    "lap_time_mean": null,
+    "lap_time_std": null,
+    "lap_time_best": null,
+    "lap_time_worst": null,
+    "collisions_mean": 1.0,
+    "motor_smoothness_mean": 0.039691,
+    "steering_smoothness_mean": 0.045134,
+    "mean_progress": 0.027
+  },
+  "episodes": [
+    {
+      "seed": 100,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.028,
+      "sim_time": 1.68,
+      "motor_smoothness": 0.036145,
+      "steering_smoothness": 0.045181
+    },
+    {
+      "seed": 101,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.025,
+      "sim_time": 1.69,
+      "motor_smoothness": 0.056886,
+      "steering_smoothness": 0.038922
+    },
+    {
+      "seed": 102,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.028,
+      "sim_time": 1.68,
+      "motor_smoothness": 0.033133,
+      "steering_smoothness": 0.051205
+    },
+    {
+      "seed": 103,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.028,
+      "sim_time": 1.68,
+      "motor_smoothness": 0.036145,
+      "steering_smoothness": 0.045181
+    },
+    {
+      "seed": 104,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.028,
+      "sim_time": 1.68,
+      "motor_smoothness": 0.036145,
+      "steering_smoothness": 0.045181
+    },
+    {
+      "seed": 105,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.028,
+      "sim_time": 1.68,
+      "motor_smoothness": 0.036145,
+      "steering_smoothness": 0.045181
+    },
+    {
+      "seed": 106,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.028,
+      "sim_time": 1.68,
+      "motor_smoothness": 0.036145,
+      "steering_smoothness": 0.045181
+    },
+    {
+      "seed": 107,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.025,
+      "sim_time": 1.69,
+      "motor_smoothness": 0.056886,
+      "steering_smoothness": 0.038922
+    },
+    {
+      "seed": 108,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.028,
+      "sim_time": 1.68,
+      "motor_smoothness": 0.036145,
+      "steering_smoothness": 0.045181
+    },
+    {
+      "seed": 109,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.028,
+      "sim_time": 1.68,
+      "motor_smoothness": 0.033133,
+      "steering_smoothness": 0.051205
+    }
+  ]
+}
