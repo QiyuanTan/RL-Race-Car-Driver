@@ -30,8 +30,9 @@ class SB3Driver(Driver):
     def load(self, path):
         self.model = self.model_class.load(path)
 
-    def train(self, total_timesteps, progress_bar=True):
-        self.model.learn(total_timesteps=total_timesteps, progress_bar=progress_bar)
+    def train(self, total_timesteps, progress_bar=True, callback=None, reset_num_timesteps=True):
+        self.model.learn(total_timesteps=total_timesteps, progress_bar=progress_bar,
+                         callback=callback, reset_num_timesteps=reset_num_timesteps)
 
     def act(self, obs):
         action, _states = self.model.predict(obs)

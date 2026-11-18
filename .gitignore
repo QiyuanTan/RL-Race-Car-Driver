@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 .venv*/
 logs/
+
+# DQN checkpoints (replay buffers are ~1 GB each)
+models/checkpoints/

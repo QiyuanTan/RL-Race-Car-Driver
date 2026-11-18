@@ -1,10 +1,13 @@
 import argparse
+import json
+import os
 from functools import partial
 from pathlib import Path
 
 from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper, dqn_wrappers
 from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper
 from stable_baselines3 import PPO, DQN, SAC
+from stable_baselines3.common.callbacks import BaseCallback
 from racecar_gym.envs import gym_api
 
 def train_ppo(env, total_timesteps=10000, save_path='ppo_model'):
@@ -27,8 +30,64 @@ def dqn_scenario(lidar=False):
     return str(REPO_ROOT / 'scenarios' / name)
 
 
+class EvalCheckpoint(BaseCallback):
+    """Every `every` steps, save the model (no replay buffer) as <prefix>_<step>_steps.zip.
+
+    Counts with the model's total step counter, so the files stay on multiples of `every`
+    after a resume too (SB3's CheckpointCallback restarts its own counter).
+    """
+
+    def __init__(self, folder, every, prefix):
+        super().__init__()
+        self.folder = Path(folder)
+        self.every = every
+        self.prefix = prefix
+
+    def _on_step(self):
+        if self.num_timesteps % self.every == 0:
+            self.folder.mkdir(parents=True, exist_ok=True)
+            self.model.save(self.folder / f'{self.prefix}_{self.num_timesteps}_steps')
+        return True
+
+
+class ResumableCheckpoint(BaseCallback):
+    """Every `every` steps, save model + replay buffer so training can be resumed.
+
+    Only the latest copy is kept: it is written to a temporary folder first and then moved into
+    place, so an interruption while saving never destroys the previous good copy.
+    """
+
+    def __init__(self, folder, every, total_timesteps):
+        super().__init__()
+        self.folder = Path(folder)
+        self.every = every
+        self.total_timesteps = total_timesteps
+
+    def _on_step(self):
+        if self.num_timesteps % self.every == 0:
+            self.save()
+        return True
+
+    def save(self):
+        tmp = self.folder / 'tmp'
+        tmp.mkdir(parents=True, exist_ok=True)
+        self.model.save(tmp / 'model')                         # weights, optimizer, step counters
+        self.model.save_replay_buffer(tmp / 'replay_buffer')   # not part of model.zip
+        (tmp / 'state.json').write_text(json.dumps(
+            {'num_timesteps': self.num_timesteps, 'total_timesteps': self.total_timesteps}))
+        for name in ('model.zip', 'replay_buffer.pkl', 'state.json'):   # state.json last
+            os.replace(tmp / name, self.folder / name)
+        print(f'[checkpoint] resumable copy saved at step {self.num_timesteps} -> {self.folder}', flush=True)
+
+
+def checkpoint_dir(save_path):
+    """models/dqn_model -> models/checkpoints/dqn_model (one folder per run, so variants never mix)."""
+    save_path = Path(save_path)
+    return save_path.parent / 'checkpoints' / save_path.name
+
+
 def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_000,
-              lidar=False, seed=None):
+              lidar=False, seed=None, eval_every=0, resume_every=0, resume=False):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -36,14 +95,56 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
 
     lidar=True adds the LiDAR scan to the observation (env must come from
     dqn_scenario(lidar=True)); everything else (actions, reward, budget) is unchanged.
+
+    Optional checkpoints (0 = off), stored in checkpoint_dir(save_path):
+        eval_every:   eval/<name>_<step>_steps.zip, model only, can be evaluated with evaluate_sb3.py
+        resume_every: resume/ model + replay buffer, latest copy only
+    resume=True continues from resume/ with the same total_timesteps plan, so the step count and
+    the exploration schedule carry on where they stopped.
     """
     log_dir = REPO_ROOT / 'logs' / ('dqn_lidar' if lidar else 'dqn')
+    folder = checkpoint_dir(save_path)
     driver = SB3Driver(
         env, model_class=DQN, wrappers=dqn_wrappers(lidar), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
     )
     try:
-        driver.train(total_timesteps=total_timesteps)
+        if resume:
+            state_file = folder / 'resume' / 'state.json'
+            if not state_file.exists():
+                raise FileNotFoundError(f'no resumable checkpoint in {state_file.parent}; '
+                                        'one is written every --resume-every steps')
+            state = json.loads(state_file.read_text())
+            if state['total_timesteps'] != total_timesteps:
+                raise ValueError(f"the checkpoint belongs to a {state['total_timesteps']}-step plan; "
+                                 f"pass --timesteps {state['total_timesteps']} to resume it")
+            driver.model = DQN.load(folder / 'resume' / 'model.zip', env=driver.env,
+                                    tensorboard_log=str(log_dir))
+            driver.model.load_replay_buffer(folder / 'resume' / 'replay_buffer.pkl')
+            if driver.model.buffer_size != buffer_size:
+                raise ValueError(f'checkpoint buffer_size is {driver.model.buffer_size}, '
+                                 f'but --buffer-size is {buffer_size}')
+            done = driver.model.num_timesteps
+            print(f'[resume] step {done} of {total_timesteps}, replay buffer holds '
+                  f'{driver.model.replay_buffer.size()} transitions', flush=True)
+        else:
+            done = 0
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / 'config.json').write_text(json.dumps({
+                'algorithm': 'DQN', 'lidar': lidar, 'scenario': os.path.basename(dqn_scenario(lidar)),
+                'total_timesteps': total_timesteps, 'seed': seed, 'buffer_size': buffer_size,
+                'eval_every': eval_every, 'resume_every': resume_every, 'save_path': str(save_path),
+            }, indent=2))
+
+        callbacks = []
+        if eval_every:
+            callbacks.append(EvalCheckpoint(folder / 'eval', eval_every, Path(save_path).name))
+        if resume_every:
+            callbacks.append(ResumableCheckpoint(folder / 'resume', resume_every, total_timesteps))
+
+        # with reset_num_timesteps=False SB3 continues counting, so its plan is again total_timesteps
+        driver.train(total_timesteps=total_timesteps - done, callback=callbacks or None,
+                     reset_num_timesteps=not resume)
         driver.save(save_path)
     finally:
         driver.env.close()
@@ -69,6 +170,12 @@ if __name__ == '__main__':
                         help='default: models/dqn_model, or models/dqn_lidar_model with --lidar')
     parser.add_argument('--buffer-size', type=int, default=10_000)
     parser.add_argument('--seed', type=int, default=None, help='SB3 seed (use the same one for both variants)')
+    parser.add_argument('--eval-every', type=int, default=0,
+                        help='save an evaluable model every N steps (0 = off)')
+    parser.add_argument('--resume-every', type=int, default=0,
+                        help='save model + replay buffer every N steps, latest copy only (0 = off)')
+    parser.add_argument('--resume', action='store_true',
+                        help='continue from the latest resumable checkpoint of this --save-path')
     args = parser.parse_args()
 
     save_path = args.save_path or ('models/dqn_lidar_model' if args.lidar else 'models/dqn_model')
@@ -83,4 +190,5 @@ if __name__ == '__main__':
 
     env = gym_api.SingleAgentRaceEnv(scenario=dqn_scenario(args.lidar), render_mode='rgb_array_birds_eye')
     train_dqn(env, total_timesteps=args.timesteps, save_path=save_path,
-              buffer_size=args.buffer_size, lidar=args.lidar, seed=args.seed)
+              buffer_size=args.buffer_size, lidar=args.lidar, seed=args.seed,
+              eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume)

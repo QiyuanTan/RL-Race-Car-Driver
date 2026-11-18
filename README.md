@@ -104,6 +104,21 @@ python train.py --timesteps 200000 --seed 0 --save-path models/dqn_model
 python train.py --lidar --timesteps 200000 --seed 0 --save-path models/dqn_lidar_model
 ```
 
+Optional checkpoints (off by default), stored in `models/checkpoints/<save-path name>/`:
+
+- `--eval-every N`: every N steps save `eval/<name>_<step>_steps.zip` (model only, about 40 MB),
+  which `evaluate_sb3.py --model ...` can evaluate.
+- `--resume-every N`: every N steps save `resume/` (model + replay buffer, about 1 GB),
+  keeping only the latest copy. After an interruption, run the same command with `--resume`
+  (same `--timesteps`): the step count and exploration schedule continue from the saved step.
+  Steps after the last resumable checkpoint are redone.
+- `config.json` records the run settings (variant, scenario, timesteps, seed, buffer size).
+
+```bash
+python train.py --timesteps 200000 --seed 0 --save-path models/dqn_model --eval-every 20000 --resume-every 100000
+python train.py --timesteps 200000 --seed 0 --save-path models/dqn_model --eval-every 20000 --resume-every 100000 --resume
+```
+
 Evaluate with the same episode loop as the FTG baseline (`evaluate_baseline.run_episode`);
 seeds 100-109 match the FTG test seeds:
 
