@@ -5,6 +5,7 @@ from functools import partial
 from pathlib import Path
 
 from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper, dqn_wrappers
+from Agents.demos import DemoKeepingDictReplayBuffer, collect_ftg_demos
 from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper, StartModeWrapper
 from stable_baselines3 import PPO, DQN, SAC
 from stable_baselines3.common.callbacks import BaseCallback
@@ -88,7 +89,7 @@ def checkpoint_dir(save_path):
 
 def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_000,
               lidar=False, seed=None, eval_every=0, resume_every=0, resume=False,
-              action_repeat=1, target_update_interval=10_000, train_start='grid'):
+              action_repeat=1, target_update_interval=10_000, train_start='grid', demo_episodes=0):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -109,15 +110,20 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
 
     train_start='random' starts training episodes at random points of the track (racecar_gym's
     'random' reset mode). Evaluation (evaluate_sb3.py) always starts from the grid.
+
+    demo_episodes=K (LiDAR only) first drives K episodes with FTG restricted to DQN's actions and
+    puts them in the replay buffer, where they stay for the whole run (see Agents/demos.py).
+    Demo decisions are extra; total_timesteps still counts only DQN's own (online) decisions.
     """
     log_dir = REPO_ROOT / 'logs' / ('dqn_lidar' if lidar else 'dqn')
     folder = checkpoint_dir(save_path)
     if train_start != 'grid':
         env = StartModeWrapper(env, mode=train_start)   # training only, not part of dqn_wrappers
+    extra = {'replay_buffer_class': DemoKeepingDictReplayBuffer} if demo_episodes else {}
     driver = SB3Driver(
         env, model_class=DQN, wrappers=dqn_wrappers(lidar, action_repeat), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
-        target_update_interval=target_update_interval,
+        target_update_interval=target_update_interval, **extra,
     )
     try:
         if resume:
@@ -127,8 +133,9 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                                         'one is written every --resume-every steps')
             state = json.loads(state_file.read_text())
             config = json.loads((folder / 'config.json').read_text())
-            defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid'}
-            for key, value in (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start)):
+            defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid', 'demo_episodes': 0}
+            for key, value in (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start),
+                               ('demo_episodes', demo_episodes)):
                 if config.get(key, defaults[key]) != value:
                     raise ValueError(f'this run was started with {key}={config.get(key)}; '
                                      f'resume it with the same setting')
@@ -146,12 +153,23 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                   f'{driver.model.replay_buffer.size()} transitions', flush=True)
         else:
             done = 0
+            demos = None
+            if demo_episodes:
+                demos = collect_ftg_demos(driver.model, driver.env, demo_episodes)
+                if demos['decisions'] >= buffer_size:
+                    raise ValueError(f"{demos['decisions']} demo decisions do not fit in buffer_size "
+                                     f'{buffer_size}; use fewer --demo-episodes')
+                driver.model.replay_buffer.keep = demos['decisions']
+                print(f"[demos] {demos['episodes']} FTG episodes, {demos['decisions']} decisions "
+                      f"({demos['simulated_steps']} simulated steps), laps completed "
+                      f"{demos['laps_completed']}/{demos['episodes']}, progress {demos['progress']}", flush=True)
             folder.mkdir(parents=True, exist_ok=True)
             (folder / 'config.json').write_text(json.dumps({
                 'algorithm': 'DQN', 'lidar': lidar, 'scenario': os.path.basename(dqn_scenario(lidar)),
                 'total_timesteps': total_timesteps, 'seed': seed, 'buffer_size': buffer_size,
                 'action_repeat': action_repeat, 'target_update_interval': target_update_interval,
                 'simulated_steps': total_timesteps * action_repeat, 'train_start': train_start,
+                'online_decisions': total_timesteps, 'demo_episodes': demo_episodes, 'demos': demos,
                 'eval_every': eval_every, 'resume_every': resume_every, 'save_path': str(save_path),
             }, indent=2))
 
@@ -196,6 +214,8 @@ if __name__ == '__main__':
     parser.add_argument('--train-start', choices=['grid', 'random'], default='grid',
                         help="where training episodes start; 'random' = random point on the track "
                              '(evaluation always starts from the grid)')
+    parser.add_argument('--demo-episodes', type=int, default=0,
+                        help='prefill the replay buffer with N FTG demo episodes (LiDAR only, 0 = off)')
     parser.add_argument('--eval-every', type=int, default=0,
                         help='save an evaluable model every N steps (0 = off)')
     parser.add_argument('--resume-every', type=int, default=0,
@@ -219,4 +239,4 @@ if __name__ == '__main__':
               buffer_size=args.buffer_size, lidar=args.lidar, seed=args.seed,
               eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume,
               action_repeat=args.action_repeat, target_update_interval=args.target_update_interval,
-              train_start=args.train_start)
+              train_start=args.train_start, demo_episodes=args.demo_episodes)

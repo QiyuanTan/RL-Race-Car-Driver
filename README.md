@@ -130,6 +130,12 @@ same action repeat.
 (racecar_gym's `random` reset mode, facing forward), so later sections such as the hairpin are
 practised too. Evaluation always starts from the grid. Recorded as `train_start` in `config.json`.
 
+`--demo-episodes K` (LiDAR only) prefills the replay buffer with K episodes driven by FTG
+restricted to DQN's discrete actions and the same action repeat (seeds 1000, 1001, ...). The
+demo transitions occupy the first slots of the buffer for the whole run; DQN's own transitions
+use the remaining `buffer_size - demo decisions` slots. `config.json` records the demo episodes,
+decisions and simulated steps next to `online_decisions` (DQN's own training decisions).
+
 Evaluate with the same episode loop as the FTG baseline (`evaluate_baseline.run_episode`);
 seeds 100-109 match the FTG test seeds:
 

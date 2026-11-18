@@ -202,3 +202,32 @@ def test_start_mode_wrapper_injects_reset_mode():
     assert env.env.last_options == {'mode': 'random'}
     env.reset(options={'mode': 'grid'})                       # an explicit mode still wins
     assert env.env.last_options == {'mode': 'grid'}
+
+
+def test_demo_slots_are_never_overwritten():
+    from Agents.demos import DemoKeepingDictReplayBuffer
+    obs_space = gym.spaces.Dict({'x': gym.spaces.Box(-1e6, 1e6, (1,), np.float32)})
+    buffer = DemoKeepingDictReplayBuffer(10, obs_space, gym.spaces.Discrete(15), device='cpu')
+
+    def add(value):
+        obs = {'x': np.array([[value]], np.float32)}
+        buffer.add(obs, obs, np.array([0]), np.array([0.0]), np.array([False]), [{}])
+
+    for demo in (-1, -2, -3):          # three demonstration transitions
+        add(demo)
+    buffer.keep = 3
+    for own in range(1, 26):           # 25 of DQN's own transitions into the 7 remaining slots
+        add(own)
+    stored = buffer.observations['x'][:, 0, 0].tolist()
+    assert stored[:3] == [-1, -2, -3]                        # demos still there
+    assert sorted(stored[3:]) == list(range(19, 26))         # the 7 newest own transitions
+    assert buffer.full and buffer.size() == 10
+
+
+def test_nearest_action_id_matches_dqn_table():
+    from Agents.demos import nearest_action_id
+    actions = DiscreteActionWrapper(FakeRaceEnv())._actions
+    command = {'motor': np.array([0.31]), 'steering': np.array([-0.8])}
+    action_id = nearest_action_id(actions, command)
+    assert actions[action_id]['motor'][0] == 0.5 and actions[action_id]['steering'][0] == -1.0
+    assert action_id == 2 * 5 + 0                            # ID = motor_index * 5 + steering_index
