@@ -46,7 +46,7 @@ class DiscreteActionWrapper(gym.ActionWrapper):
 
 
 class StartModeWrapper(gym.Wrapper):
-    """Training only: start each episode with racecar_gym's reset mode, e.g. 'random'.
+    """for training only: start each episode with racecar_gym's reset mode, e.g. 'random'.
 
     'random' puts the car at a random point on the track centre line, facing forward, so the
     agent also practises later parts of the track (such as the hairpin) instead of always
@@ -64,7 +64,7 @@ class StartModeWrapper(gym.Wrapper):
 
 
 class ActionRepeatWrapper(gym.Wrapper):
-    """Repeat each action for `repeat` simulator steps (0.01 s each); rewards are added up.
+    """repeat each action for `repeat` simulator steps (0.01 s each); rewards are added up.
 
     The policy then decides every `repeat` steps, e.g. repeat=4 -> 25 Hz, which matches the
     LiDAR update rate. Stops early when the episode ends, and returns the last observation/info.
@@ -87,7 +87,7 @@ class ActionRepeatWrapper(gym.Wrapper):
 
 
 class LidarObservationWrapper(gym.ObservationWrapper):
-    """Clean and scale the raw LiDAR scan so it can be fed to the policy as a vector.
+    """clean and scale the raw LiDAR scan so it can be fed to the policy as a vector.
 
     racecar_gym's `lidar` observation is Box(low=0.25, high=15.25, shape=(1080,), float64),
     distances in metres. The sensor itself clips readings to [0.25, 15.0], so the space's
@@ -145,3 +145,20 @@ class FlattenActionWrapper(gym.ActionWrapper):
 
     def reverse_action(self, action):
         return flatten(self._original_action_space, action)
+
+
+class SimStepCounter(gym.Wrapper):
+    """Counts real simulator steps (training only), so config.json can report the actual numbers."""
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.sim_steps = 0
+        self.episodes = 0
+
+    def reset(self, **kwargs):
+        self.episodes += 1
+        return self.env.reset(**kwargs)
+
+    def step(self, action):
+        self.sim_steps += 1
+        return self.env.step(action)
