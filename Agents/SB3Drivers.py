@@ -1,6 +1,7 @@
 from Agents.Driver import Driver
 from Agents.wrappers import (FlattenActionWrapper, DiscreteActionWrapper, LidarObservationWrapper,
                             ActionRepeatWrapper)
+from Agents.track_features import OBS_MODES, TrackFeatureWrapper
 import gymnasium as gym
 from gymnasium import ObservationWrapper, spaces
 import numpy as np
@@ -105,18 +106,39 @@ class SB3ObservationWrapper(ObservationWrapper):
         return observation
 
     
-def dqn_wrappers(lidar=False, action_repeat=1):
-    """Wrapper list for DQN, shared by training and evaluation so both preprocess identically.
+def resolve_obs_mode(lidar=False, obs_mode=None):
+    """--lidar is the old spelling of --obs-mode lidar; both together must agree."""
+    if obs_mode is None:
+        return 'lidar' if lidar else 'base'
+    if obs_mode not in OBS_MODES:
+        raise ValueError(f'obs_mode must be one of {OBS_MODES}, got {obs_mode!r}')
+    if lidar and obs_mode != 'lidar':
+        raise ValueError(f'--lidar conflicts with --obs-mode {obs_mode}')
+    return obs_mode
 
-    Base DQN: discrete actions + SB3 observation fix.
-    lidar=True: additionally cleans/scales the raw `lidar` scan (the scenario must include it).
-    action_repeat>1: each decision is held for that many simulator steps (innermost wrapper,
-    so it repeats the decoded motor/steering command).
+
+def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None):
     """
+    Wrappers used by both training and eval.
+
+    base: discrete actions and the SB3 observation fix
+    lidar: also cleans and scales the lidar readings, needs a lidar sensor
+    track: adds 5 track-relative values
+    track-lookahead: also adds 5 points ahead, 10 values total for lookahead
+
+    All modes keep the camera, pose, velocity, acceleration and time.
+    The old lidar flag still works.
+
+    Action repeat goes on the inside so it repeats the decoded
+    motor and steering for N simulator steps.
+    """
+    obs_mode = resolve_obs_mode(lidar, obs_mode)
     wrappers = [partial(ActionRepeatWrapper, repeat=action_repeat)] if action_repeat > 1 else []
     wrappers.append(DiscreteActionWrapper)
-    if lidar:
+    if obs_mode == 'lidar':
         wrappers.append(LidarObservationWrapper)
+    elif obs_mode.startswith('track'):
+        wrappers.append(partial(TrackFeatureWrapper, lookahead=obs_mode == 'track-lookahead'))
     wrappers.append(SB3ObservationWrapper)
     return wrappers
 
@@ -124,14 +146,12 @@ def dqn_wrappers(lidar=False, action_repeat=1):
 class SB3EvalDriver(Driver):
 
     """
-    DQN+ lidar (compare to dqn baseline)
-    Adapter so a trained SB3Driver can be evaluated like FollowTheGapDriver.
+     evaluate an SB3 model with the same loop as FTG.
+    act takes the raw observation and returns motor and steering.
 
-    act(raw obs) -> {'motor': array([m]), 'steering': array([s])}, which is what
-    evaluate_baseline.run_episode expects, it calls act once per simulator step.
-    
-    Actions are greedy (deterministic=True). With action_repeat=N the model decides on steps
-    0, N, 2N, ... and the same command is returned in between, exactly as in training.
+    Eval uses deterministic=True, so there's no random exploration.
+    With action_repeat=N, we pick an action every N steps
+    and keep using it until the next decision, just like in training.
     """
 
     def __init__(self, sb3_driver, action_repeat=1):
