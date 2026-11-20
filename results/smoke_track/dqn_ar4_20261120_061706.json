@@ -1,0 +1,118 @@
+{
+  "model": "models/smoke_base.zip",
+  "obs_mode": "base",
+  "lidar": false,
+  "action_repeat": 4,
+  "scenario": "scenarios/austria.yml",
+  "summary": {
+    "env": "austria.yml",
+    "seeds": [
+      0
+    ],
+    "laps_completed": "0/1",
+    "collision_free_laps": 0,
+    "lap_time_mean": null,
+    "lap_time_std": null,
+    "lap_time_best": null,
+    "lap_time_worst": null,
+    "collisions_mean": 1.0,
+    "motor_smoothness_mean": 0.125,
+    "steering_smoothness_mean": 0.194079,
+    "mean_progress": 0.009,
+    "progress_std": 0.0,
+    "progress_min": 0.009,
+    "progress_max": 0.009,
+    "lap_rate": 0.0,
+    "ends": {
+      "wall_crash": 1
+    },
+    "stuck": 0,
+    "action_repeat": 4,
+    "obs_mode": "base"
+  },
+  "episodes": [
+    {
+      "seed": 0,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.009,
+      "sim_time": 1.54,
+      "motor_smoothness": 0.125,
+      "steering_smoothness": 0.194079,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 0.55,
+      "final_xy": [
+        1.39,
+        0.3
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.74,
+          0.12
+        ],
+        [
+          0.77,
+          0.12
+        ],
+        [
+          0.82,
+          0.14
+        ],
+        [
+          0.88,
+          0.15
+        ],
+        [
+          0.94,
+          0.16
+        ],
+        [
+          0.98,
+          0.17
+        ],
+        [
+          1.01,
+          0.18
+        ],
+        [
+          1.06,
+          0.19
+        ],
+        [
+          1.11,
+          0.2
+        ],
+        [
+          1.16,
+          0.21
+        ],
+        [
+          1.21,
+          0.22
+        ],
+        [
+          1.26,
+          0.25
+        ],
+        [
+          1.32,
+          0.27
+        ],
+        [
+          1.38,
+          0.3
+        ],
+        [
+          1.39,
+          0.3
+        ]
+      ]
+    }
+  ]
+}

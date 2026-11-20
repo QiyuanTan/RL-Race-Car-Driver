@@ -1,0 +1,194 @@
+{
+  "model": "models/checkpoints/smoke_track_lookahead/eval/smoke_track_lookahead_2000_steps.zip",
+  "obs_mode": "track-lookahead",
+  "lidar": false,
+  "action_repeat": 4,
+  "scenario": "scenarios/austria.yml",
+  "summary": {
+    "env": "austria.yml",
+    "seeds": [
+      0,
+      1
+    ],
+    "laps_completed": "0/2",
+    "collision_free_laps": 0,
+    "lap_time_mean": null,
+    "lap_time_std": null,
+    "lap_time_best": null,
+    "lap_time_worst": null,
+    "collisions_mean": 1.0,
+    "motor_smoothness_mean": 0.055944,
+    "steering_smoothness_mean": 0.15035,
+    "mean_progress": 0.022,
+    "progress_std": 0.0,
+    "progress_min": 0.022,
+    "progress_max": 0.022,
+    "lap_rate": 0.0,
+    "ends": {
+      "wall_crash": 2
+    },
+    "stuck": 0,
+    "action_repeat": 4,
+    "obs_mode": "track-lookahead"
+  },
+  "episodes": [
+    {
+      "seed": 0,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.022,
+      "sim_time": 1.45,
+      "motor_smoothness": 0.055944,
+      "steering_smoothness": 0.15035,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.21,
+      "final_xy": [
+        2.41,
+        -0.95
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.75,
+          0.1
+        ],
+        [
+          0.81,
+          0.09
+        ],
+        [
+          0.89,
+          0.07
+        ],
+        [
+          0.99,
+          0.04
+        ],
+        [
+          1.11,
+          -0.01
+        ],
+        [
+          1.25,
+          -0.07
+        ],
+        [
+          1.4,
+          -0.16
+        ],
+        [
+          1.55,
+          -0.26
+        ],
+        [
+          1.71,
+          -0.36
+        ],
+        [
+          1.87,
+          -0.48
+        ],
+        [
+          2.02,
+          -0.6
+        ],
+        [
+          2.18,
+          -0.75
+        ],
+        [
+          2.35,
+          -0.9
+        ],
+        [
+          2.41,
+          -0.95
+        ]
+      ]
+    },
+    {
+      "seed": 1,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.022,
+      "sim_time": 1.45,
+      "motor_smoothness": 0.055944,
+      "steering_smoothness": 0.15035,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.21,
+      "final_xy": [
+        2.41,
+        -0.95
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.75,
+          0.1
+        ],
+        [
+          0.81,
+          0.09
+        ],
+        [
+          0.89,
+          0.07
+        ],
+        [
+          0.99,
+          0.04
+        ],
+        [
+          1.11,
+          -0.01
+        ],
+        [
+          1.25,
+          -0.07
+        ],
+        [
+          1.4,
+          -0.16
+        ],
+        [
+          1.55,
+          -0.26
+        ],
+        [
+          1.71,
+          -0.36
+        ],
+        [
+          1.87,
+          -0.48
+        ],
+        [
+          2.02,
+          -0.6
+        ],
+        [
+          2.18,
+          -0.75
+        ],
+        [
+          2.35,
+          -0.9
+        ],
+        [
+          2.41,
+          -0.95
+        ]
+      ]
+    }
+  ]
+}
