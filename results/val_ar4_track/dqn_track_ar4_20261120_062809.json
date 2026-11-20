@@ -1,0 +1,710 @@
+{
+  "model": "models/checkpoints/dqn_track_ar4_long/eval/dqn_track_ar4_long_20000_steps.zip",
+  "obs_mode": "track",
+  "lidar": false,
+  "action_repeat": 4,
+  "scenario": "scenarios/austria.yml",
+  "summary": {
+    "env": "austria.yml",
+    "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "laps_completed": "0/10",
+    "collision_free_laps": 0,
+    "lap_time_mean": null,
+    "lap_time_std": null,
+    "lap_time_best": null,
+    "lap_time_worst": null,
+    "collisions_mean": 1.0,
+    "motor_smoothness_mean": 0.08419,
+    "steering_smoothness_mean": 0.154381,
+    "mean_progress": 0.013,
+    "progress_std": 0.003,
+    "progress_min": 0.006,
+    "progress_max": 0.015,
+    "lap_rate": 0.0,
+    "ends": {
+      "wall_crash": 10
+    },
+    "stuck": 0,
+    "action_repeat": 4,
+    "obs_mode": "track"
+  },
+  "episodes": [
+    {
+      "seed": 0,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.015,
+      "sim_time": 1.28,
+      "motor_smoothness": 0.079365,
+      "steering_smoothness": 0.15873,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.76,
+      "final_xy": [
+        1.89,
+        0.32
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.72,
+          0.1
+        ],
+        [
+          0.76,
+          0.09
+        ],
+        [
+          0.81,
+          0.09
+        ],
+        [
+          0.88,
+          0.1
+        ],
+        [
+          0.96,
+          0.11
+        ],
+        [
+          1.06,
+          0.12
+        ],
+        [
+          1.17,
+          0.15
+        ],
+        [
+          1.3,
+          0.18
+        ],
+        [
+          1.44,
+          0.22
+        ],
+        [
+          1.6,
+          0.25
+        ],
+        [
+          1.76,
+          0.29
+        ],
+        [
+          1.89,
+          0.32
+        ]
+      ]
+    },
+    {
+      "seed": 1,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.015,
+      "sim_time": 1.28,
+      "motor_smoothness": 0.079365,
+      "steering_smoothness": 0.15873,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.76,
+      "final_xy": [
+        1.89,
+        0.32
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.72,
+          0.1
+        ],
+        [
+          0.76,
+          0.09
+        ],
+        [
+          0.81,
+          0.09
+        ],
+        [
+          0.88,
+          0.1
+        ],
+        [
+          0.96,
+          0.11
+        ],
+        [
+          1.06,
+          0.12
+        ],
+        [
+          1.17,
+          0.15
+        ],
+        [
+          1.3,
+          0.18
+        ],
+        [
+          1.44,
+          0.22
+        ],
+        [
+          1.6,
+          0.25
+        ],
+        [
+          1.76,
+          0.29
+        ],
+        [
+          1.89,
+          0.32
+        ]
+      ]
+    },
+    {
+      "seed": 2,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.006,
+      "sim_time": 0.77,
+      "motor_smoothness": 0.08,
+      "steering_smoothness": 0.12,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 0.87,
+      "final_xy": [
+        1.19,
+        0.29
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.73,
+          0.1
+        ],
+        [
+          0.77,
+          0.1
+        ],
+        [
+          0.84,
+          0.11
+        ],
+        [
+          0.91,
+          0.14
+        ],
+        [
+          1.01,
+          0.19
+        ],
+        [
+          1.12,
+          0.26
+        ],
+        [
+          1.19,
+          0.29
+        ]
+      ]
+    },
+    {
+      "seed": 3,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.01,
+      "sim_time": 1.07,
+      "motor_smoothness": 0.095238,
+      "steering_smoothness": 0.157143,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.14,
+      "final_xy": [
+        1.48,
+        0.31
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.72,
+          0.1
+        ],
+        [
+          0.76,
+          0.1
+        ],
+        [
+          0.8,
+          0.1
+        ],
+        [
+          0.86,
+          0.1
+        ],
+        [
+          0.94,
+          0.12
+        ],
+        [
+          1.03,
+          0.15
+        ],
+        [
+          1.14,
+          0.18
+        ],
+        [
+          1.26,
+          0.23
+        ],
+        [
+          1.4,
+          0.28
+        ],
+        [
+          1.48,
+          0.31
+        ]
+      ]
+    },
+    {
+      "seed": 4,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.015,
+      "sim_time": 1.28,
+      "motor_smoothness": 0.079365,
+      "steering_smoothness": 0.15873,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.76,
+      "final_xy": [
+        1.89,
+        0.32
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.72,
+          0.1
+        ],
+        [
+          0.76,
+          0.09
+        ],
+        [
+          0.81,
+          0.09
+        ],
+        [
+          0.88,
+          0.1
+        ],
+        [
+          0.96,
+          0.11
+        ],
+        [
+          1.06,
+          0.12
+        ],
+        [
+          1.17,
+          0.15
+        ],
+        [
+          1.3,
+          0.18
+        ],
+        [
+          1.44,
+          0.22
+        ],
+        [
+          1.6,
+          0.25
+        ],
+        [
+          1.76,
+          0.29
+        ],
+        [
+          1.89,
+          0.32
+        ]
+      ]
+    },
+    {
+      "seed": 5,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.015,
+      "sim_time": 1.28,
+      "motor_smoothness": 0.079365,
+      "steering_smoothness": 0.15873,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.76,
+      "final_xy": [
+        1.89,
+        0.32
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.72,
+          0.1
+        ],
+        [
+          0.76,
+          0.09
+        ],
+        [
+          0.81,
+          0.09
+        ],
+        [
+          0.88,
+          0.1
+        ],
+        [
+          0.96,
+          0.11
+        ],
+        [
+          1.06,
+          0.12
+        ],
+        [
+          1.17,
+          0.15
+        ],
+        [
+          1.3,
+          0.18
+        ],
+        [
+          1.44,
+          0.22
+        ],
+        [
+          1.6,
+          0.25
+        ],
+        [
+          1.76,
+          0.29
+        ],
+        [
+          1.89,
+          0.32
+        ]
+      ]
+    },
+    {
+      "seed": 6,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.015,
+      "sim_time": 1.28,
+      "motor_smoothness": 0.079365,
+      "steering_smoothness": 0.15873,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.76,
+      "final_xy": [
+        1.89,
+        0.32
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.72,
+          0.1
+        ],
+        [
+          0.76,
+          0.09
+        ],
+        [
+          0.81,
+          0.09
+        ],
+        [
+          0.88,
+          0.1
+        ],
+        [
+          0.96,
+          0.11
+        ],
+        [
+          1.06,
+          0.12
+        ],
+        [
+          1.17,
+          0.15
+        ],
+        [
+          1.3,
+          0.18
+        ],
+        [
+          1.44,
+          0.22
+        ],
+        [
+          1.6,
+          0.25
+        ],
+        [
+          1.76,
+          0.29
+        ],
+        [
+          1.89,
+          0.32
+        ]
+      ]
+    },
+    {
+      "seed": 7,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.015,
+      "sim_time": 1.28,
+      "motor_smoothness": 0.079365,
+      "steering_smoothness": 0.15873,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.76,
+      "final_xy": [
+        1.89,
+        0.32
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.72,
+          0.1
+        ],
+        [
+          0.76,
+          0.09
+        ],
+        [
+          0.81,
+          0.09
+        ],
+        [
+          0.88,
+          0.1
+        ],
+        [
+          0.96,
+          0.11
+        ],
+        [
+          1.06,
+          0.12
+        ],
+        [
+          1.17,
+          0.15
+        ],
+        [
+          1.3,
+          0.18
+        ],
+        [
+          1.44,
+          0.22
+        ],
+        [
+          1.6,
+          0.25
+        ],
+        [
+          1.76,
+          0.29
+        ],
+        [
+          1.89,
+          0.32
+        ]
+      ]
+    },
+    {
+      "seed": 8,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.01,
+      "sim_time": 1.07,
+      "motor_smoothness": 0.095238,
+      "steering_smoothness": 0.157143,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.14,
+      "final_xy": [
+        1.48,
+        0.31
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.72,
+          0.1
+        ],
+        [
+          0.76,
+          0.1
+        ],
+        [
+          0.8,
+          0.1
+        ],
+        [
+          0.86,
+          0.1
+        ],
+        [
+          0.94,
+          0.12
+        ],
+        [
+          1.03,
+          0.15
+        ],
+        [
+          1.14,
+          0.18
+        ],
+        [
+          1.26,
+          0.23
+        ],
+        [
+          1.4,
+          0.28
+        ],
+        [
+          1.48,
+          0.31
+        ]
+      ]
+    },
+    {
+      "seed": 9,
+      "lap_completed": false,
+      "lap_time": null,
+      "collisions": 1,
+      "progress": 0.01,
+      "sim_time": 1.07,
+      "motor_smoothness": 0.095238,
+      "steering_smoothness": 0.157143,
+      "end": "wall_crash",
+      "stuck_last_10s": false,
+      "final_speed": 1.14,
+      "final_xy": [
+        1.48,
+        0.31
+      ],
+      "trajectory_every_10_steps": [
+        [
+          0.71,
+          0.1
+        ],
+        [
+          0.72,
+          0.1
+        ],
+        [
+          0.76,
+          0.1
+        ],
+        [
+          0.8,
+          0.1
+        ],
+        [
+          0.86,
+          0.1
+        ],
+        [
+          0.94,
+          0.12
+        ],
+        [
+          1.03,
+          0.15
+        ],
+        [
+          1.14,
+          0.18
+        ],
+        [
+          1.26,
+          0.23
+        ],
+        [
+          1.4,
+          0.28
+        ],
+        [
+          1.48,
+          0.31
+        ]
+      ]
+    }
+  ]
+}
