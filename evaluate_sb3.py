@@ -1,17 +1,17 @@
-"""Evaluate a trained DQN model (base or LiDAR) with the same episode loop as the FTG baseline.
+"""Evaluates a DQN model in base, lidar, track or track-lookahead mode.
 
-I reuse run_episode() and summarize() from evaluate_baseline.py, so the results have the same
-fields as the FTG results (eg.lap_completed, lap_time, collisions, progress, smoothness).
+Uses run_episode() and summarize() from evaluate_baseline.py, so we get the same
+metrics as FTG: lap completion, lap time, collisions, progress and smoothness.
 
-The model is wrapped in SB3EvalDriver:
- raw observation -> same observation wrappers as training-> greedy DQN action ID -> same discrete action table -> {'motor', 'steering'}.
+SB3EvalDriver processes observations the same way as training, picks the
+highest-scoring action, then turns the action ID into motor and steering.
 
-differ part from the FTG evaluation (by design, so both DQN variants match their training setup):
-    1. scenario: scenarios/austria.yml (base) or scenarios/austria_lidar.yml (--lidar),
-      not the registered SingleAgentAustria-v0 used for FTG
-    2. terminate_on_collision is True in these scenarios, so an episode ends at the first wall
-      contact (collisions is then 0 or 1); FTG's scenario keeps driving after a contact
-    3, step limit: the scenario's 120 s time limit (12,000 steps), same for both variant
+A few things differ from FTG to match how DQN was trained:
+- Base and track modes use scenarios/austria.yml. Lidar uses scenarios/austria_lidar.yml.
+  FTG uses SingleAgentAustria-v0.
+- DQN episodes stop at the first wall contact, so collisions can only be 0 or 1.
+  FTG keeps driving after contact.
+- All DQN modes use the scenario's 120 s limit, or 12,000 simulator steps.
 """
 import argparse
 import json
@@ -20,13 +20,17 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import gymnasium as gym
+import numpy as np
+
 from gymnasium import spaces
 from stable_baselines3 import DQN
 from stable_baselines3.common.preprocessing import is_image_space, is_image_space_channels_first
 from stable_baselines3.common.vec_env import VecTransposeImage
 from racecar_gym.envs import gym_api
 
-from Agents.SB3Drivers import SB3Driver, SB3EvalDriver, dqn_wrappers
+from Agents.SB3Drivers import SB3Driver, SB3EvalDriver, dqn_wrappers, resolve_obs_mode
+from Agents.track_features import feature_config
 from evaluate_baseline import run_episode, summarize
 from train import dqn_scenario
 
@@ -50,47 +54,104 @@ def training_config(model_path):
     return json.loads(config.read_text()) if config.exists() else None
 
 """refuse to evaluate with settings that differ from how the model was trained."""
-def check_against_training(model_path, lidar, action_repeat):
+def check_against_training(model_path, lidar, action_repeat, obs_mode=None):
+    """Compares the obs mode, every feature setting (names, scales, centre line hash) and the action
+    repeat, so e.g. a model trained on an older centre line is refused even if the sizes match."""
     config = training_config(model_path)
     if config is None:
         return
-
-
-    
-    trained = {'lidar': config.get('lidar', False), 'action_repeat': config.get('action_repeat', 1)}
-    now = {'lidar': lidar, 'action_repeat': action_repeat}
+    obs_mode = resolve_obs_mode(lidar, obs_mode)
+    old_mode = 'lidar' if config.get('lidar', False) else 'base'      # configs from before --obs-mode
+    trained = {'obs_mode': config.get('obs_mode', old_mode), 'action_repeat': config.get('action_repeat', 1),
+               'features': config.get('features', feature_config(old_mode))}
+    now = {'obs_mode': obs_mode, 'action_repeat': action_repeat, 'features': feature_config(obs_mode)}
     if trained != now:
-        raise ValueError(f'{model_path} was trained with {trained}, but this evaluation uses {now}. '
-                         'Pass the same --lidar / --action-repeat as in training.')
+        differences = {key: (trained[key], now[key]) for key in trained if trained[key] != now[key]}
+        if 'features' in differences:     # show only the feature settings that differ
+            old, new = differences.pop('features')
+            differences.update({f'features.{k}': (old.get(k), new.get(k)) for k in old.keys() | new.keys()
+                                if old.get(k) != new.get(k)})
+        raise ValueError(f'{model_path} was trained differently, (training, now): {differences}. '
+                         'Pass the same --obs-mode (or --lidar) / --action-repeat as in training, '
+                         'and use the centre line file it was trained with.')
 
 """rebuild the training wrappers around env and load the trained model into them."""
 
-def load_dqn_driver(env, model_path, lidar, action_repeat=1):
-    # buffer_size=1: the throwaway model built here is replaced by load(); no need for a big buffer
-    driver = SB3Driver(env, model_class=DQN, wrappers=dqn_wrappers(lidar, action_repeat), buffer_size=1)
+def load_dqn_driver(env, model_path, lidar, action_repeat=1, obs_mode=None):
+    obs_mode = resolve_obs_mode(lidar, obs_mode)
+    #buffer_size=1: the throwaway model built here is replaced by load(); no need for a big buffer
+    driver = SB3Driver(env, model_class=DQN, wrappers=dqn_wrappers(action_repeat=action_repeat, obs_mode=obs_mode),
+                       buffer_size=1)
     driver.load(model_path)
-    # compare key by key: gymnasium's Dict equality also depends on key order, which differs harmlessly
+    #compare key by key: gymnasium's Dict equality also depends on key order, which differs harmlessly
 
     if dict(driver.model.observation_space.spaces) != dict(as_sb3_sees_it(driver.env.observation_space).spaces):
         raise ValueError(
             f'{model_path} was trained on a different observation than '
-            f'{"--lidar" if lidar else "the base setting"} gives.\n'
+            f'--obs-mode {obs_mode} gives.\n'
             f'model: {driver.model.observation_space}\nnow:   {driver.env.observation_space}\n'
-            'Add or remove --lidar to match how the model was trained.'
+            'Use the --obs-mode the model was trained with.'
         )
 
     
     return driver
 
 
+TIME_LIMIT = 120.0   #seconds, from scenarios/austria*.yml
+
+
+class EpisodeRecorder(gym.Wrapper):
+    """Watches the raw environment during evaluation only (never seen by the policy).
+
+    Records how the episode ended and a coarse trajectory (every 10 simulator steps), so we can
+    tell a wall crash from a time-out, spot cars that stopped, and check where on the track a run
+    ended (progress > 35% alone does not prove the hairpin was passed).
+    """
+
+    def __init__(self, env, every=10):
+        super().__init__(env)
+        self.every = every
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self.steps, self.trajectory, self.progress_log = 0, [], []
+        self.ended = None
+        return obs, info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self.steps += 1
+        if self.steps % self.every == 0 or terminated or truncated:
+            self.trajectory.append([round(float(info['pose'][0]), 2), round(float(info['pose'][1]), 2)])
+            self.progress_log.append((float(info['time']), float(info['progress'])))
+        if terminated or truncated:
+            self.ended = info
+            #racecar_gym ends the 120 s limit with terminated=True, so check the time too
+            self.how = 'lap' if info['lap'] >= 2 else 'wall_crash' if info['wall_collision'] else \
+                'time_limit' if truncated or info['time'] >= TIME_LIMIT - 0.02 else 'other_termination'
+        return obs, reward, terminated, truncated, info
+
+    def summary(self):
+        # "stuck": progress changed less than 0.5% of a lap in the last 10 s of the episode
+        end_time = self.progress_log[-1][0]
+        recent = [p for time, p in self.progress_log if time >= end_time - 10.0]
+        moved = np.abs(np.diff(recent))
+        moved = moved[moved < 0.5].sum()# ignore the 1 -> 0 jump at the start line
+        speed = np.hypot(*self.ended['velocity'][:2])
+        return {'end': self.how, 'stuck_last_10s': bool(end_time >= 10.0 and moved < 0.005),
+                'final_speed': round(float(speed), 2), 'final_xy': self.trajectory[-1],
+                'trajectory_every_10_steps': self.trajectory}
+
+
 def run_episode_in_new_process(job):
     """Fresh process per episode, because racecar_gym's reset does not fully clear the last one."""
-    model_path, lidar, action_repeat, seed, render = job
+    model_path, obs_mode, action_repeat, seed, render = job
 
-    env = gym_api.SingleAgentRaceEnv(scenario=dqn_scenario(lidar),
-                                     render_mode='human' if render else 'rgb_array_birds_eye')
-    driver = SB3EvalDriver(load_dqn_driver(env, model_path, lidar, action_repeat), action_repeat)
+    env = EpisodeRecorder(gym_api.SingleAgentRaceEnv(scenario=dqn_scenario(obs_mode == 'lidar'),
+                                                     render_mode='human' if render else 'rgb_array_birds_eye'))
+    driver = SB3EvalDriver(load_dqn_driver(env, model_path, False, action_repeat, obs_mode), action_repeat)
     result = run_episode(env, driver, seed)
+    result.update(env.summary())
     env.close()
 
     return result
@@ -99,7 +160,9 @@ def run_episode_in_new_process(job):
 def main():
     parser = argparse.ArgumentParser(description='Evaluate a trained DQN model.')
     parser.add_argument('--model', required=True, help='path to the saved model .zip')
-    parser.add_argument('--lidar', action='store_true', help='model was trained with LiDAR observations')
+    parser.add_argument('--lidar', action='store_true', help='model was trained with LiDAR (= --obs-mode lidar)')
+    parser.add_argument('--obs-mode', choices=['base', 'lidar', 'track', 'track-lookahead'], default=None,
+                        help='same as in training (checked against the training config.json)')
     parser.add_argument('--action-repeat', type=int, default=1,
                         help='same value as in training (checked against the training config.json)')
     
@@ -110,31 +173,39 @@ def main():
     parser.add_argument('--out', default='results/dqn')
     args = parser.parse_args()
 
-    check_against_training(args.model, args.lidar, args.action_repeat)
+    obs_mode = resolve_obs_mode(args.lidar, args.obs_mode)
+    check_against_training(args.model, False, args.action_repeat, obs_mode)
 
-    jobs = [(args.model, args.lidar, args.action_repeat, args.seed + i, args.render)
+    jobs = [(args.model, obs_mode, args.action_repeat, args.seed + i, args.render)
             for i in range(args.episodes)]
     workers = 1 if args.render else args.workers
     episodes = []
 
     with mp.get_context('spawn').Pool(workers, maxtasksperchild=1) as pool:
         for result in pool.imap(run_episode_in_new_process, jobs):
-            print(result, flush=True)
+            print({k: v for k, v in result.items() if k != 'trajectory_every_10_steps'}, flush=True)
             episodes.append(result)
 
     summary = summarize(episodes)
-    summary['env'] = os.path.basename(dqn_scenario(args.lidar))
-    summary['mean_progress'] = round(sum(e['progress'] for e in episodes) / len(episodes), 3)
+    summary['env'] = os.path.basename(dqn_scenario(obs_mode == 'lidar'))
+    progress = np.array([e['progress'] for e in episodes])
+    summary['mean_progress'] = round(float(progress.mean()), 3)
+    summary.update(progress_std=round(float(progress.std()), 3), progress_min=float(progress.min()),
+                   progress_max=float(progress.max()),
+                   lap_rate=round(sum(e['lap_completed'] for e in episodes) / len(episodes), 2),
+                   ends={end: sum(e['end'] == end for e in episodes) for end in sorted({e['end'] for e in episodes})},
+                   stuck=sum(e['stuck_last_10s'] for e in episodes), action_repeat=args.action_repeat,
+                   obs_mode=obs_mode)
     print(json.dumps(summary, indent=2))
 
     os.makedirs(args.out, exist_ok=True)
 
-    name = ('dqn_lidar' if args.lidar else 'dqn') + (f'_ar{args.action_repeat}' if args.action_repeat > 1 else '')
+    name = {'base': 'dqn', 'lidar': 'dqn_lidar'}.get(obs_mode, f"dqn_{obs_mode.replace('-', '_')}") + (f'_ar{args.action_repeat}' if args.action_repeat > 1 else '')
     path = os.path.join(args.out, f"{name}_{datetime.now():%Y%m%d_%H%M%S}.json")
 
     with open(path, 'w') as f:
-        json.dump(dict(model=args.model, lidar=args.lidar, action_repeat=args.action_repeat,
-                       scenario=os.path.join('scenarios', os.path.basename(dqn_scenario(args.lidar))),
+        json.dump(dict(model=args.model, obs_mode=obs_mode, lidar=obs_mode == 'lidar', action_repeat=args.action_repeat,
+                       scenario=os.path.join('scenarios', os.path.basename(dqn_scenario(obs_mode == 'lidar'))),
                        summary=summary, episodes=episodes), f, indent=2)
         
     print('saved', path)
