@@ -1,7 +1,7 @@
 """Summarize DQN runs: training curves (TensorBoard) and checkpoint evaluations (results JSON).
 
 Usage (from the repo root):
-    python dqn_diagnose.py curves            # training curve of the latest base and LiDAR runs
+    python dqn_diagnose.py curves            # training curve of the latest run of every obs mode
     python dqn_diagnose.py evals results/dqn_ckpt   # mean progress of every evaluated checkpoint
 """
 import glob
@@ -10,14 +10,22 @@ import os
 import sys
 
 
-def curves():
-    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
-    for variant in ('dqn', 'dqn_lidar'):
-        runs = sorted(glob.glob(f'logs/{variant}/DQN_*'), key=os.path.getmtime)
-        if not runs:
+def latest_runs():
+    """Latest log folder of every obs mode. Careful: the latest is not always the run you want."""
+    runs = []
+    for variant in ('dqn', 'dqn_lidar', 'dqn_track', 'dqn_track-lookahead'):   # logs/<folder> per obs mode
+        found = sorted(glob.glob(f'logs/{variant}/DQN_*'), key=os.path.getmtime)
+        if found:
+            runs.append(found[-1])
+        else:
             print(f'{variant}: no runs in logs/{variant}')
-            continue
-        run = runs[-1]                                   # latest run = the 200k run
+    return runs
+
+
+def curves(runs):
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+    for run in runs:
+        variant = os.path.basename(os.path.dirname(run))
         points = {}
         for f in sorted(glob.glob(run + '/events*')):    # a resumed run writes a second file
             ea = EventAccumulator(f, size_guidance={'scalars': 0})
@@ -65,6 +73,7 @@ def evals(folder):
 
 if __name__ == '__main__':
     if sys.argv[1] == 'curves':
-        curves()
+        curves(sys.argv[2:] or latest_runs())
     else:
         evals(sys.argv[2])
+

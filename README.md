@@ -149,6 +149,14 @@ python evaluate_sb3.py --model models/dqn_lidar_model.zip --lidar --episodes 10 
 The DQN scenarios end an episode at the first wall contact, so `collisions` is 0 or 1 and
 `progress` shows how far the car got.
 
+### DQN with track-relative / look-ahead observations
+
+`--obs-mode track` adds 5 numbers describing the car relative to the track centre line (offset,
+heading error, velocity along/across the track); `--obs-mode track-lookahead` also adds the
+centre line points 1-8 m ahead in the car's frame. Both use a centre line extracted from
+racecar_gym's map (`scenarios/austria_centerline.npz`), so these are map-based policies. The old
+`--lidar` flag still works (`--obs-mode lidar`). Details, checks and commands: [DQN_TRACK.md](DQN_TRACK.md).
+
 To view training metrics, run:
 
 ```bash
