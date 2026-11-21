@@ -46,12 +46,13 @@ class DiscreteActionWrapper(gym.ActionWrapper):
 
 
 class StartModeWrapper(gym.Wrapper):
-    """Training only: start each episode with racecar_gym's reset mode, e.g. 'random'.
+    """use the chosen racecar_gym reset mode for training episodes.
 
-    'random' puts the car at a random point on the track centre line, facing forward, so the
-    agent also practises later parts of the track (such as the hairpin) instead of always
-    starting from the grid. An explicit options={'mode': ...} passed to reset() still wins.
-    """
+    'random' starts the car at a random point on the track centerline,
+    facing forward, so it can practice later sections like the hairpin.
+
+    if reset() gets options={'mode': ...}, use that mode.
+"""
 
     def __init__(self, env, mode='grid'):
         super().__init__(env)
@@ -145,3 +146,65 @@ class FlattenActionWrapper(gym.ActionWrapper):
 
     def reverse_action(self, action):
         return flatten(self._original_action_space, action)
+
+
+class HairpinStartWrapper(gym.Wrapper):
+    """start some training episodes just before the Austria hairpin.
+    share is the chance of starting at a random point in window. The default
+    is 0.22–0.30, about 4.5–11 m before the apex (0.351), so the car has room
+    to get up to speed. Other training runs and all eval runs start on the grid.
+
+    racecar_gym picks the random start, so keep resetting until it lands in
+    the window. About 1 in 15 resets works, and each takes ~0.03 s.
+
+    stop at 0.30 because closer starts can face 40–110 degrees off the track
+    direction. The car aims at a point ahead that's already around the corner.
+    """
+
+    def __init__(self, env, share=0.5, window=(0.22, 0.30), max_tries=1000):
+        super().__init__(env)
+        if not 0.0 <= share <= 1.0:
+            raise ValueError('share must be between 0 and 1')
+        self.share, self.window, self.max_tries = share, window, max_tries
+        self.rng = np.random.default_rng()
+        self.hairpin_starts = 0
+        self.grid_starts = 0
+
+    def reset(self, *, seed=None, options=None):
+        if seed is not None:
+            self.rng = np.random.default_rng(seed)
+        if self.rng.random() >= self.share:
+            self.grid_starts += 1
+            return self.env.reset(seed=seed, options=dict(options or {}, mode='grid'))
+        for _ in range(self.max_tries):
+            obs, info = self.env.reset(seed=seed, options=dict(options or {}, mode='random'))
+            seed = None                     # seed only the first try
+            if self.window[0] <= info['progress'] <= self.window[1]:
+                self.hairpin_starts += 1
+                return obs, info
+        raise RuntimeError(f'no random start in progress window {self.window} after {self.max_tries} tries')
+
+
+class CrashPenaltyWrapper(gym.Wrapper):
+    """subtract penalty from the reward if a training episode ends with a wall hit.
+the normal reward is 100 times progress gained, so a full lap pays 100 and
+crashes cost nothing. At the hairpin, driving straight into the wall near
+the apex earns progress quickly. Going wide and turning early earns very
+little at first, so the crash penalty can make that line pay off.
+
+eval ignores rewards.
+    """
+
+    def __init__(self, env, penalty=10.0):
+        super().__init__(env)
+        if penalty < 0:
+            raise ValueError('penalty must be >= 0 (it is subtracted)')
+        self.penalty = penalty
+        self.crashes = 0
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        if terminated and info.get('wall_collision', False):
+            reward -= self.penalty
+            self.crashes += 1
+        return obs, reward, terminated, truncated, info
