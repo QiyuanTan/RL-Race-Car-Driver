@@ -8,6 +8,7 @@ import numpy as np
 from functools import partial
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecEnv
 from stable_baselines3.common.monitor import Monitor
+from Agents.wrappers2 import SignedProgressRewardWrapper
 
 class SB3Driver(Driver):
     def __init__(self, env, model_class, wrappers=None, policy="MultiInputPolicy", **kwargs):
@@ -117,28 +118,37 @@ def resolve_obs_mode(lidar=False, obs_mode=None):
     return obs_mode
 
 
-def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None):
-    """
-    Wrappers used by both training and eval.
 
-    base: discrete actions and the SB3 observation fix
-    lidar: also cleans and scales the lidar readings, needs a lidar sensor
-    track: adds 5 track-relative values
-    track-lookahead: also adds 5 points ahead, 10 values total for lookahead
-
-    All modes keep the camera, pose, velocity, acceleration and time.
-    The old lidar flag still works.
-
-    Action repeat goes on the inside so it repeats the decoded
-    motor and steering for N simulator steps.
-    """
+def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None,
+                 reward_mode='original'):
     obs_mode = resolve_obs_mode(lidar, obs_mode)
-    wrappers = [partial(ActionRepeatWrapper, repeat=action_repeat)] if action_repeat > 1 else []
+
+    if reward_mode not in ('original', 'signed-progress'):
+        raise ValueError(f'Unknown reward mode: {reward_mode}')
+
+    wrappers = []
+
+    # Reward must be inside ActionRepeatWrapper.
+    if reward_mode == 'signed-progress':
+        wrappers.append(SignedProgressRewardWrapper)
+
+    if action_repeat > 1:
+        wrappers.append(
+            partial(ActionRepeatWrapper, repeat=action_repeat)
+        )
+
     wrappers.append(DiscreteActionWrapper)
+
     if obs_mode == 'lidar':
         wrappers.append(LidarObservationWrapper)
     elif obs_mode.startswith('track'):
-        wrappers.append(partial(TrackFeatureWrapper, lookahead=obs_mode == 'track-lookahead'))
+        wrappers.append(
+            partial(
+                TrackFeatureWrapper,
+                lookahead=obs_mode == 'track-lookahead'
+            )
+        )
+
     wrappers.append(SB3ObservationWrapper)
     return wrappers
 

@@ -8,6 +8,8 @@ from pathlib import Path
 from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper, dqn_wrappers, resolve_obs_mode
 from Agents.track_features import feature_config
 from Agents.demos import DemoKeepingDictReplayBuffer, collect_ftg_demos
+from Agents.ftg_track_demos import collect_ftg_track_demos
+from Agents.wrappers2 import FTGTeacherLidarWrapper
 from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper, SimStepCounter, StartModeWrapper
 from stable_baselines3 import PPO, DQN, SAC
 from stable_baselines3.common.callbacks import BaseCallback
@@ -119,7 +121,7 @@ def checkpoint_dir(save_path):
 def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_000,
               lidar=False, seed=None, eval_every=0, resume_every=0, resume=False,
               action_repeat=1, target_update_interval=10_000, train_start='grid', demo_episodes=0,
-              demo_laps=0, obs_mode=None):
+              demo_laps=0, obs_mode=None, reward_mode='original'):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -128,7 +130,7 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
     obs_mode can be base, lidar, track or track-lookahead.
     lidar=True still works as the old way to select lidar.
     Lidar needs dqn_scenario(lidar=True), the others use dqn_scenario().
-    Only the inputs change. Actions, reward, episode endings and DQN settings stay the same.
+    observation mode changes the inputs, reward mode optionally changes the training reward. actions, episode endings, and DQN settings stay the same.
 
     Checkpoints go in checkpoint_dir(save_path). Set the interval to 0 to turn them off.
     eval_every saves just the model in eval/<name>_<step>_steps.zip.
@@ -145,13 +147,15 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
     Eval still starts from the grid.
 
     demo_episodes=K adds K FTG episodes to the replay buffer before training.
-    This only works with lidar. FTG uses DQN's action choices, and the demos stay
+    For track-lookahead, FTG sees hidden LiDAR; the DQN inputs remain unchanged.
+    FTG uses DQN's action choices, and the demos stay
     in the buffer for the whole run.
     demo_laps=K collects demos until it has K completed laps, keeping only those.
     Demo steps are extra. total_timesteps only counts DQN's own decisions.
     """
     obs_mode = resolve_obs_mode(lidar, obs_mode)
     lidar = obs_mode == 'lidar'
+    use_track_demos = bool(demo_episodes or demo_laps) and obs_mode == 'track-lookahead'
     log_dir = REPO_ROOT / 'logs' / {'base': 'dqn', 'lidar': 'dqn_lidar'}.get(obs_mode, f'dqn_{obs_mode}')
     folder = checkpoint_dir(save_path)
     features = feature_config(obs_mode)
@@ -160,9 +164,12 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
         env = StartModeWrapper(env, mode=train_start)   # training only, not part of dqn_wrappers
     if demo_episodes and demo_laps:
         raise ValueError('use either --demo-episodes or --demo-laps, not both')
+    if use_track_demos:
+        # The LiDAR sensor is available to FTG only; DQN sees the original observations.
+        env = FTGTeacherLidarWrapper(env)
     extra = {'replay_buffer_class': DemoKeepingDictReplayBuffer} if (demo_episodes or demo_laps) else {}
     driver = SB3Driver(
-        env, model_class=DQN, wrappers=dqn_wrappers(action_repeat=action_repeat, obs_mode=obs_mode), verbose=1,
+        env, model_class=DQN, wrappers=dqn_wrappers(action_repeat=action_repeat, obs_mode=obs_mode, reward_mode=reward_mode), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
         target_update_interval=target_update_interval, **extra,
     )
@@ -174,10 +181,16 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                                         'one is written every --resume-every steps')
             state = json.loads(state_file.read_text())
             config = json.loads((folder / 'config.json').read_text())
-            defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid', 'demo_episodes': 0,
-                        'demo_laps': 0}
-            for key, value in (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start),
-                               ('demo_episodes', demo_episodes), ('demo_laps', demo_laps)):
+            defaults = {
+                'lidar': False,
+                'action_repeat': 1,
+                'train_start': 'grid',
+                'demo_episodes': 0,
+                'demo_laps': 0,
+                'reward_mode': 'original',
+            }
+            
+            for key, value in (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start), ('demo_episodes', demo_episodes), ('demo_laps', demo_laps), ('reward_mode', reward_mode),):
                 if config.get(key, defaults[key]) != value:
                     raise ValueError(f'this run was started with {key}={config.get(key)}; '
                                      f'resume it with the same setting')
@@ -204,7 +217,8 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             sim_steps_before = 0
             demos = None
             if demo_episodes or demo_laps:
-                demos = collect_ftg_demos(driver.model, driver.env, episodes=demo_episodes, laps=demo_laps)
+                demo_collector = collect_ftg_track_demos if use_track_demos else collect_ftg_demos
+                demos = demo_collector(driver.model, driver.env, episodes=demo_episodes, laps=demo_laps)
                 if demos['decisions'] >= buffer_size:
                     raise ValueError(f"{demos['decisions']} demo decisions do not fit in buffer_size "
                                      f'{buffer_size}; use fewer --demo-episodes')
@@ -216,12 +230,13 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             folder.mkdir(parents=True, exist_ok=True)
             (folder / 'config.json').write_text(json.dumps({
                 'algorithm': 'DQN', 'obs_mode': obs_mode, 'lidar': lidar,
-                'scenario': os.path.basename(dqn_scenario(lidar)), 'features': features,
+                'scenario': os.path.basename(dqn_scenario(lidar or use_track_demos)), 'features': features,
                 'observation_space': {k: list(s.shape) for k, s in driver.env.observation_space.spaces.items()},
                 'dqn': dqn_settings(driver.model), 'code': git_commit(),
                 'total_timesteps': total_timesteps, 'seed': seed, 'buffer_size': buffer_size,
                 'action_repeat': action_repeat, 'target_update_interval': target_update_interval,
                 'simulated_steps': total_timesteps * action_repeat, 'train_start': train_start,
+                'reward_mode': reward_mode,
                 'online_decisions': total_timesteps, 'demo_episodes': demo_episodes, 'demo_laps': demo_laps,
                 'demos': demos,
                 'eval_every': eval_every, 'resume_every': resume_every, 'save_path': str(save_path),
@@ -300,6 +315,12 @@ if __name__ == '__main__':
                         help='save model + replay buffer every N steps, latest copy only (0 = off)')
     parser.add_argument('--resume', action='store_true',
                         help='continue from the latest resumable checkpoint of this --save-path')
+    parser.add_argument(
+    '--reward-mode',
+    choices=['original', 'signed-progress'],
+    default='original',
+    help='reward function used during DQN training'
+    )
     args = parser.parse_args()
 
     obs_mode = resolve_obs_mode(args.lidar, args.obs_mode)
@@ -314,9 +335,11 @@ if __name__ == '__main__':
     # ]
     # train_ppo(env_factories, total_timesteps=1_000_000, save_path='models/ppo_model')
 
-    env = gym_api.SingleAgentRaceEnv(scenario=dqn_scenario(obs_mode == 'lidar'), render_mode='rgb_array_birds_eye')
+    training_lidar = (obs_mode == 'lidar' or
+                      (obs_mode == 'track-lookahead' and bool(args.demo_episodes or args.demo_laps)))
+    env = gym_api.SingleAgentRaceEnv(scenario=dqn_scenario(training_lidar), render_mode='rgb_array_birds_eye')
     train_dqn(env, total_timesteps=args.timesteps, save_path=save_path, obs_mode=obs_mode,
               buffer_size=args.buffer_size, seed=args.seed,
               eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume,
               action_repeat=args.action_repeat, target_update_interval=args.target_update_interval,
-              train_start=args.train_start, demo_episodes=args.demo_episodes, demo_laps=args.demo_laps)
+              train_start=args.train_start, demo_episodes=args.demo_episodes, demo_laps=args.demo_laps, reward_mode=args.reward_mode)

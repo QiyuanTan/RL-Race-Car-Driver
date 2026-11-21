@@ -7,3 +7,6 @@ logs/
 
 # DQN checkpoints (replay buffers are ~1 GB each)
 models/checkpoints/
+
+# trained DQN / BC models
+models/jx_*.zip
