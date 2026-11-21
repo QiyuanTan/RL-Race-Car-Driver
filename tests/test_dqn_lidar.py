@@ -281,3 +281,87 @@ def test_demo_laps_keeps_only_full_laps(monkeypatch):
     
     with pytest.raises(RuntimeError, match='only 1 of 2'):
         demos.collect_ftg_demos(FakeModel(), None, laps=2, max_attempts=2)    
+
+
+class ProgressEnv(FakeRaceEnv):
+    """Each 'random' reset lands at the next progress value from the list; 'grid' is progress 0.02."""
+
+    def __init__(self, progresses):
+        super().__init__(with_lidar=False)
+        self.progresses, self.modes = list(progresses), []
+
+    def reset(self, seed=None, options=None):
+        mode = (options or {}).get('mode')
+        self.modes.append(mode)
+        progress = self.progresses.pop(0) if mode == 'random' else 0.02
+        return self.make_obs(), {'progress': progress}
+
+
+def test_hairpin_start_retries_until_inside_the_window():
+    from Agents.wrappers import HairpinStartWrapper
+    env = HairpinStartWrapper(ProgressEnv([0.6, 0.1, 0.31, 0.25]), share=1.0)
+    _, info = env.reset(seed=0)
+    assert info['progress'] == 0.25 and env.env.modes == ['random'] * 4 and env.hairpin_starts == 1
+
+
+def test_hairpin_start_share_and_seed():
+    from Agents.wrappers import HairpinStartWrapper
+    always_grid = HairpinStartWrapper(ProgressEnv([]), share=0.0)
+    assert all(always_grid.reset(seed=s)[1]['progress'] == 0.02 for s in range(5))
+    picks = []
+    for _ in range(2):# same seed -> same grid/hairpin choices
+        env = HairpinStartWrapper(ProgressEnv([0.25] * 100), share=0.5)
+        env.reset(seed=3)
+        picks.append([env.reset()[1]['progress'] for _ in range(40)])
+    assert picks[0] == picks[1] and 0.02 in picks[0] and 0.25 in picks[0]
+
+
+def test_hairpin_start_gives_up_with_a_clear_error():
+    from Agents.wrappers import HairpinStartWrapper
+    with pytest.raises(RuntimeError):
+        HairpinStartWrapper(ProgressEnv([0.9] * 10), share=1.0, max_tries=10).reset(seed=0)
+
+
+def test_init_from_must_match_lidar_and_action_repeat(tmp_path):
+    import json
+    from train import check_init_model
+    folder = tmp_path / 'checkpoints' / 'run'
+    (folder / 'eval').mkdir(parents=True)
+    (folder / 'config.json').write_text(json.dumps({'lidar': True, 'action_repeat': 4}))
+    model = folder / 'eval' / 'run_140000_steps.zip'
+    model.write_bytes(b'')
+    check_init_model(model, True, 4)
+    with pytest.raises(ValueError):
+        check_init_model(model, True, 2)
+    with pytest.raises(FileNotFoundError):
+        check_init_model(tmp_path / 'missing.zip', True, 4)
+
+
+class EndingEnv(FakeRaceEnv):
+    """gives reward 1 per step; the 3rd step ends the episode, with or without a wall contact."""
+
+    def __init__(self, wall):
+        super().__init__(with_lidar=False)
+        self.wall, self.t = wall, 0
+
+    def reset(self, seed=None, options=None):
+        self.t = 0
+        return self.make_obs(), {}
+
+    def step(self, action):
+        self.t += 1
+        done = self.t == 3
+        return self.make_obs(), 1.0, done, False, {'wall_collision': done and self.wall}
+
+
+def test_crash_penalty_only_on_a_wall_ending():
+    from Agents.wrappers import ActionRepeatWrapper, CrashPenaltyWrapper
+    for wall, last_reward in ((True, 1.0 - 10.0), (False, 1.0)):
+        env = CrashPenaltyWrapper(EndingEnv(wall), penalty=10.0)
+        env.reset()
+        rewards = [env.step(0)[1] for _ in range(3)]
+        assert rewards == [1.0, 1.0, last_reward] and env.crashes == int(wall)
+    # under action repeat 4 the penalty is still counted once: 3 steps x 1 - 10
+    env = ActionRepeatWrapper(CrashPenaltyWrapper(EndingEnv(True), penalty=10.0), repeat=4)
+    env.reset()
+    assert env.step(0)[1] == pytest.approx(3.0 - 10.0)
