@@ -6,7 +6,8 @@ from pathlib import Path
 
 from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper, dqn_wrappers
 from Agents.demos import DemoKeepingDictReplayBuffer, collect_ftg_demos
-from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper, StartModeWrapper
+from Agents.wrappers import (FlattenActionWrapper, DiscreteActionWrapper, CrashPenaltyWrapper, HairpinStartWrapper,
+                             StartModeWrapper)
 from stable_baselines3 import PPO, DQN, SAC
 from stable_baselines3.common.callbacks import BaseCallback
 from racecar_gym.envs import gym_api
@@ -32,7 +33,7 @@ def dqn_scenario(lidar=False):
 
 
 class EvalCheckpoint(BaseCallback):
-    """Every `every` steps, save the model (no replay buffer) as <prefix>_<step>_steps.zip.
+    """every steps, save the model (no replay buffer) as <prefix>_<step>_steps.zip.
 
     Counts with the model's total step counter, so the files stay on multiples of `every`
     after a resume too (SB3's CheckpointCallback restarts its own counter).
@@ -90,7 +91,7 @@ def checkpoint_dir(save_path):
 def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_000,
               lidar=False, seed=None, eval_every=0, resume_every=0, resume=False,
               action_repeat=1, target_update_interval=10_000, train_start='grid', demo_episodes=0,
-              demo_laps=0):
+              demo_laps=0, hairpin_share=0.5, init_from=None, crash_penalty=0.0):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -99,36 +100,54 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
     lidar=True adds the LiDAR scan to the observation (env must come from
     dqn_scenario(lidar=True)); everything else (actions, reward, budget) is unchanged.
 
-    Optional checkpoints (0 = off), stored in checkpoint_dir(save_path):
-        eval_every:   eval/<name>_<step>_steps.zip, model only, can be evaluated with evaluate_sb3.py
-        resume_every: resume/ model + replay buffer, latest copy only
-    resume=True continues from resume/ with the same total_timesteps plan, so the step count and
-    the exploration schedule carry on where they stopped.
+    checkpoints go in checkpoint_dir(save_path). set either interval to 0 to turn it off.
+    eval_every saves model-only snapshots to eval/<name>_<step>_steps.zip for evaluate_sb3.py.
+    resume_every keeps the latest model and replay buffer in resume/.
+    resume=True picks up the step count and exploration schedule. keep total_timesteps the same.
 
-    action_repeat=N holds each decision for N simulator steps. SB3 then counts decisions, so
-    total_timesteps, buffer_size and target_update_interval are all in decisions
-    (simulated time = decisions * N * 0.01 s).
+    action_repeat=N holds each action for N sim steps. total_timesteps, buffer_size,
+    and target_update_interval count decisions. each decision covers N * 0.01 s.
 
-    train_start='random' starts training episodes at random points of the track (racecar_gym's
-    'random' reset mode). Evaluation (evaluate_sb3.py) always starts from the grid.
+    train_start='random' uses random track starts for training. eval starts on the grid.
 
-    demo_episodes=K (LiDAR only) first drives K episodes with FTG restricted to DQN's actions and
-    puts them in the replay buffer, where they stay for the whole run (see Agents/demos.py).
-    demo_laps=K instead keeps only demo episodes that complete a full lap, until K laps are kept.
-    Demo decisions are extra; total_timesteps still counts only DQN's own decisions.
+    demos (LiDAR only) use FTG with DQN's actions (see Agents/demos.py).
+    demo_episodes=K keeps K episodes. demo_laps=K keeps only K completed laps.
+    demos stay in the replay buffer and don't count toward total_timesteps.
+
+    train_start='hairpin' starts a fraction (hairpin_share) of episodes just before
+    the Austria hairpin. the rest start on the grid.
+
+    init_from=<model.zip> fine-tunes a saved model with exploration fixed at 5%.
+    match the saved model's LiDAR inputs and action repeat.
+
+    crash_penalty=P subtracts P from the training reward on a wall hit that ends
+    the episode. 0 turns it off.
     """
     log_dir = REPO_ROOT / 'logs' / ('dqn_lidar' if lidar else 'dqn')
     folder = checkpoint_dir(save_path)
-    if train_start != 'grid':
-        env = StartModeWrapper(env, mode=train_start)   # training only, not part of dqn_wrappers
+    penalty = None
+    if crash_penalty:
+        env = penalty = CrashPenaltyWrapper(env, penalty=crash_penalty)   
+    starts = None
+    if train_start == 'hairpin':
+        env = starts = HairpinStartWrapper(env, share=hairpin_share) 
+    elif train_start != 'grid':
+        env = StartModeWrapper(env, mode=train_start)   #training only, not part of dqn_wrappers
+    if init_from:
+        check_init_model(init_from, lidar, action_repeat)
+        extra_init = {'exploration_initial_eps': 0.05}  
+    else:
+        extra_init = {}
     if demo_episodes and demo_laps:
         raise ValueError('use either --demo-episodes or --demo-laps, not both')
     extra = {'replay_buffer_class': DemoKeepingDictReplayBuffer} if (demo_episodes or demo_laps) else {}
     driver = SB3Driver(
         env, model_class=DQN, wrappers=dqn_wrappers(lidar, action_repeat), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
-        target_update_interval=target_update_interval, **extra,
+        target_update_interval=target_update_interval, **extra, **extra_init,
     )
+    if init_from:
+        driver.model.set_parameters(str(init_from), exact_match=True) 
     try:
         if resume:
             state_file = folder / 'resume' / 'state.json'
@@ -138,9 +157,13 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             state = json.loads(state_file.read_text())
             config = json.loads((folder / 'config.json').read_text())
             defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid', 'demo_episodes': 0,
-                        'demo_laps': 0}
-            for key, value in (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start),
-                               ('demo_episodes', demo_episodes), ('demo_laps', demo_laps)):
+                        'demo_laps': 0, 'hairpin_share': None, 'init_from': None, 'crash_penalty': 0.0}
+            settings = (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start),
+                        ('demo_episodes', demo_episodes), ('demo_laps', demo_laps),
+                        ('hairpin_share', hairpin_share if train_start == 'hairpin' else None),
+                        ('init_from', str(init_from) if init_from else None),
+                        ('crash_penalty', float(crash_penalty)))
+            for key, value in settings:
                 if config.get(key, defaults[key]) != value:
                     raise ValueError(f'this run was started with {key}={config.get(key)}; '
                                      f'resume it with the same setting')
@@ -177,6 +200,10 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                 'simulated_steps': total_timesteps * action_repeat, 'train_start': train_start,
                 'online_decisions': total_timesteps, 'demo_episodes': demo_episodes, 'demo_laps': demo_laps,
                 'demos': demos,
+                'hairpin_share': hairpin_share if train_start == 'hairpin' else None,
+                'init_from': str(init_from) if init_from else None,
+                'crash_penalty': float(crash_penalty),
+                'exploration_initial_eps': driver.model.exploration_initial_eps,
                 'eval_every': eval_every, 'resume_every': resume_every, 'save_path': str(save_path),
             }, indent=2))
 
@@ -190,8 +217,27 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
         driver.train(total_timesteps=total_timesteps - done, callback=callbacks or None,
                      reset_num_timesteps=not resume)
         driver.save(save_path)
+        if starts is not None or penalty is not None:  
+            config = json.loads((folder / 'config.json').read_text())
+            if starts is not None:
+                config['start_counts_this_process'] = {'hairpin': starts.hairpin_starts, 'grid': starts.grid_starts}
+            if penalty is not None:
+                config['penalized_crashes_this_process'] = penalty.crashes
+            (folder / 'config.json').write_text(json.dumps(config, indent=2))
     finally:
         driver.env.close()
+
+def check_init_model(init_from, lidar, action_repeat):
+    """The model we fine-tune from must have been trained with the same observation and action repeat."""
+    from evaluate_sb3 import training_config
+    if not Path(init_from).exists():
+        raise FileNotFoundError(f'--init-from model not found: {init_from}')
+    config = training_config(init_from)
+    if config is None:
+        raise ValueError(f'no config.json found for {init_from}; cannot check how it was trained')
+    trained = {'lidar': config.get('lidar', False), 'action_repeat': config.get('action_repeat', 1)}
+    if trained != {'lidar': lidar, 'action_repeat': action_repeat}:
+        raise ValueError(f'{init_from} was trained with {trained}; use the same --lidar / --action-repeat')
 
 
 def train_sac(env, total_timesteps=10000, save_path='sac_model'):
@@ -218,9 +264,16 @@ if __name__ == '__main__':
                         help='hold each decision for N simulator steps (1 = off, 4 = 25 Hz like the LiDAR)')
     parser.add_argument('--target-update-interval', type=int, default=10_000,
                         help='DQN target network update interval, in decisions (SB3 default 10000)')
-    parser.add_argument('--train-start', choices=['grid', 'random'], default='grid',
-                        help="where training episodes start; 'random' = random point on the track "
+    parser.add_argument('--train-start', choices=['grid', 'random', 'hairpin'], default='grid',
+                        help="where training episodes start; 'random' = random point on the track, "
+                             "'hairpin' = part of the episodes just before the hairpin "
                              '(evaluation always starts from the grid)')
+    parser.add_argument('--hairpin-share', type=float, default=0.5,
+                        help='with --train-start hairpin: share of episodes starting before the hairpin')
+    parser.add_argument('--crash-penalty', type=float, default=0.0,
+                        help='subtract this from the reward when an episode ends at a wall (0 = off)')
+    parser.add_argument('--init-from', default=None,
+                        help='fine-tune from this trained model .zip (same --lidar / --action-repeat)')
     parser.add_argument('--demo-episodes', type=int, default=0,
                         help='prefill the replay buffer with N FTG demo episodes (LiDAR only, 0 = off)')
     parser.add_argument('--demo-laps', type=int, default=0,
@@ -249,4 +302,5 @@ if __name__ == '__main__':
               buffer_size=args.buffer_size, lidar=args.lidar, seed=args.seed,
               eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume,
               action_repeat=args.action_repeat, target_update_interval=args.target_update_interval,
-              train_start=args.train_start, demo_episodes=args.demo_episodes, demo_laps=args.demo_laps)
+              train_start=args.train_start, demo_episodes=args.demo_episodes, demo_laps=args.demo_laps,
+              hairpin_share=args.hairpin_share, init_from=args.init_from, crash_penalty=args.crash_penalty)
