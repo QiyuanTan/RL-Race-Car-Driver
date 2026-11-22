@@ -1,7 +1,7 @@
 from functools import partial
 from pathlib import Path
 
-from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper
+from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper, TrackPPODriver
 from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper
 from stable_baselines3 import PPO, DQN, SAC
 from racecar_gym.envs import gym_api
@@ -10,6 +10,17 @@ def train_ppo(env, total_timesteps=10000, save_path='ppo_model'):
     log_dir = Path(__file__).resolve().parent / 'logs' / 'ppo'
     wrappers = [FlattenActionWrapper, SB3ObservationWrapper]
     driver = SB3Driver(env, model_class=PPO, wrappers=wrappers, verbose=1, tensorboard_log=str(log_dir))
+    try:
+        driver.train(total_timesteps=total_timesteps)
+        driver.save(save_path)
+    finally:
+        driver.env.close()
+
+
+def train_track_ppo(env, total_timesteps=10000, save_path='track_ppo_model', *, log_dir=None):
+    if log_dir is None:
+        log_dir = Path(__file__).resolve().parent / 'logs' / 'track_ppo'
+    driver = TrackPPODriver(env, verbose=1, tensorboard_log=str(log_dir))
     try:
         driver.train(total_timesteps=total_timesteps)
         driver.save(save_path)
@@ -48,13 +59,22 @@ def train_sac(env, total_timesteps=10000, save_path='sac_model'):
 
 
 if __name__ == '__main__':
-    n_parallel_instances = 4
-    scenario = str(Path(__file__).resolve().parent / 'scenarios' / 'austria.yml')
-    # env_factories = [
-    #     partial(gym_api.SingleAgentRaceEnv, scenario=scenario, render_mode='rgb_array_birds_eye')
-    #     for _ in range(n_parallel_instances)
-    # ]
-    # train_ppo(env_factories, total_timesteps=1_000_000, save_path='models/ppo_model')
-
-    env = gym_api.SingleAgentRaceEnv(scenario=scenario, render_mode='rgb_array_birds_eye')
-    train_dqn(env, total_timesteps=1_000_000, save_path='models/dqn_model')
+    project_dir = Path(__file__).resolve().parent
+    n_envs = 4
+    runs = (
+        ('allow_collisions', 'austria_allow_collisions.yml'),
+        ('terminate_on_collision', 'austria.yml'),
+    )
+    for run_name, scenario_file in runs:
+        scenario = str(project_dir / 'scenarios' / scenario_file)
+        env_factories = [
+            partial(gym_api.SingleAgentRaceEnv, scenario=scenario, render_mode='rgb_array_birds_eye')
+            for _ in range(n_envs)
+        ]
+        print(f'Training Track PPO ({run_name})')
+        train_track_ppo(
+            env_factories,
+            total_timesteps=1_000_000,
+            save_path=str(project_dir / 'models' / f'track_ppo_{run_name}'),
+            log_dir=project_dir / 'logs' / 'track_ppo' / run_name,
+        )
