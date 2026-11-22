@@ -99,3 +99,19 @@ tensorboard --logdir logs
 
 For inference, `run_sim.py` provides a simple interface to load a trained model and run it in the simulator.
 
+
+## Shared evaluation interface
+
+`evaluate_shared.py` evaluates FTG, DQN (including `base`, `lidar`, `track`, and `track-lookahead` modes), and PPO/SAC with the existing `evaluate_baseline.run_episode` metrics. For the behavior-cloning geometry-only DQN, use `--obs-mode track-lookahead --geometry-only`. Models must be evaluated with their training-time observation mode, action repeat and feature settings. Saved-model observation and action spaces are checked before evaluation; geometry-only models have no complete configuration check, so the user must supply matching feature settings.
+
+Examples (install the project dependencies and racecar_gym first):
+
+```bash
+python evaluate_shared.py --algorithm ftg --episodes 10 --seed 100
+python evaluate_shared.py --algorithm dqn --model path/to/dqn.zip --obs-mode lidar --action-repeat 4
+python evaluate_shared.py --algorithm dqn --model path/to/student.zip --obs-mode track-lookahead --geometry-only --action-repeat 4
+python evaluate_shared.py --algorithm ppo --model models/ppo_model_w_collision.zip
+python evaluate_shared.py --algorithm sac --model path/to/sac.zip
+```
+
+Each episode uses a fresh process and JSON records the settings, summary and per-episode metrics. These are a common interface, not yet a fully aligned experiment: FTG uses `SingleAgentAustria-v0` and continues after wall contact; the SB3 scenarios terminate at the first contact. Smoothness per simulator step is affected by action repeat. Keep these differences in mind when comparing results.
