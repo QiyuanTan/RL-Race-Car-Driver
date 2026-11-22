@@ -1,14 +1,22 @@
-from Agents.Driver import Driver
-from Agents.wrappers import (FlattenActionWrapper, DiscreteActionWrapper, LidarObservationWrapper,
-                            ActionRepeatWrapper)
-from Agents.track_features import OBS_MODES, TrackFeatureWrapper
-import gymnasium as gym
-from gymnasium import ObservationWrapper, spaces
-import numpy as np
 from functools import partial
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecEnv
-from stable_baselines3.common.monitor import Monitor
+
+import gymnasium as gym
+import numpy as np
+from Agents.track_features import OBS_MODES, TrackFeatureWrapper
 from Agents.wrappers2 import SignedProgressRewardWrapper
+from gymnasium import ObservationWrapper, spaces
+from gymnasium.wrappers import FilterObservation
+from stable_baselines3 import PPO
+from stable_baselines3.common.torch_layers import CombinedExtractor
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import VecEnv
+from torch import nn
+
+from Agents.Driver import Driver
+from Agents.wrappers import (DiscreteActionWrapper, LidarObservationWrapper,
+                             ActionRepeatWrapper)
+from Agents.wrappers import FlattenActionWrapper, TrackObservationWrapper
+
 
 class SB3Driver(Driver):
     def __init__(self, env, model_class, wrappers=None, policy="MultiInputPolicy", **kwargs):
@@ -76,8 +84,10 @@ class SB3Driver(Driver):
         env = factory()
         env = self.apply_wrappers(env)
         return env
-"""Convert scalar Box entries in Dict observations to one-element vectors."""
+
 class SB3ObservationWrapper(ObservationWrapper):
+    """Convert scalar Box entries in Dict observations to one-element vectors."""
+
     def __init__(self, env):
         super().__init__(env)
         self._scalar_spaces = {}
@@ -106,7 +116,50 @@ class SB3ObservationWrapper(ObservationWrapper):
             observation[key] = np.asarray(obs[key], dtype=space.dtype).reshape(1)
         return observation
 
-    
+
+class TrackFeaturesExtractor(CombinedExtractor):
+    """Encode the normalized track channels with a CNN alongside the sensors."""
+
+    def __init__(self, observation_space, **kwargs):
+        track_key = TrackObservationWrapper.KEY
+        sensor_space = spaces.Dict([
+            (key, space) for key, space in observation_space.spaces.items() if key != track_key
+        ])
+        super().__init__(sensor_space, **kwargs)
+        track_features = 128
+        self.extractors[track_key] = nn.Sequential(
+            nn.Conv2d(observation_space[track_key].shape[0], 16, kernel_size=5, stride=4, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((4, 4)),
+            nn.Flatten(),
+            nn.Linear(32 * 4 * 4, track_features),
+            nn.ReLU(),
+        )
+        self._features_dim += track_features
+
+
+class TrackPPODriver(SB3Driver):
+    """Train or run PPO with a full-track view and non-camera observations."""
+
+    def __init__(self, env, *, track=None, map_size=256, n_steps=256, policy_kwargs=None, **kwargs):
+        wrappers = [
+            FlattenActionWrapper,
+            SB3ObservationWrapper,
+            partial(TrackObservationWrapper, track=track, map_size=map_size),
+            self._exclude_rgb_camera,
+        ]
+        policy_kwargs = dict(policy_kwargs or {})
+        policy_kwargs.setdefault("features_extractor_class", TrackFeaturesExtractor)
+        super().__init__(env, PPO, wrappers=wrappers, n_steps=n_steps, policy_kwargs=policy_kwargs, **kwargs)
+
+    @staticmethod
+    def _exclude_rgb_camera(env):
+        keys = [key for key in env.observation_space.spaces if key != "rgb_camera"]
+        return FilterObservation(env, filter_keys=keys)
+
+
 def resolve_obs_mode(lidar=False, obs_mode=None):
     """--lidar is the old spelling of --obs-mode lidar; both together must agree."""
     if obs_mode is None:
