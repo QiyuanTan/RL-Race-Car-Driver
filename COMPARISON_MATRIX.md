@@ -51,3 +51,7 @@ Sources: `results/baseline_ftg/ftg_20261102_190856.json`, `results/test_ar4/dqn_
 3. Run each driver under those conditions. Record model/checkpoint, algorithm, observation configuration, training seed and budget, evaluation seeds, simulator version and run settings.
 4. Save per-episode results plus summaries: completion rate, collision-free completion rate, progress, lap time for completed laps, contacts, and motor/steering command changes. Clearly mark unavailable results.
 5. Keep the current historical results separate from any new aligned runs. Do not infer PPO or SAC performance until evaluated.
+
+## Newer implementations and shared runner
+
+The `jx_dqn_improvement` branch extends DQN with `track` and `track-lookahead` observations and behavior-cloned DQN models, including a geometry-only option. `evaluate_shared.py` connects these variants, FTG, PPO and SAC to the existing episode metrics loop. For commands and limitations, see the shared evaluation section in `README.md`. The historical results above do not include these newer variants.
