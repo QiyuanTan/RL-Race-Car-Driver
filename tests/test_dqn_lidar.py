@@ -309,7 +309,7 @@ def test_hairpin_start_share_and_seed():
     always_grid = HairpinStartWrapper(ProgressEnv([]), share=0.0)
     assert all(always_grid.reset(seed=s)[1]['progress'] == 0.02 for s in range(5))
     picks = []
-    for _ in range(2):# same seed -> same grid/hairpin choices
+    for _ in range(2):            
         env = HairpinStartWrapper(ProgressEnv([0.25] * 100), share=0.5)
         env.reset(seed=3)
         picks.append([env.reset()[1]['progress'] for _ in range(40)])
@@ -338,7 +338,7 @@ def test_init_from_must_match_lidar_and_action_repeat(tmp_path):
 
 
 class EndingEnv(FakeRaceEnv):
-    """gives reward 1 per step; the 3rd step ends the episode, with or without a wall contact."""
+    """Gives reward 1 per step; the 3rd step ends the episode, with or without a wall contact."""
 
     def __init__(self, wall):
         super().__init__(with_lidar=False)
@@ -365,3 +365,74 @@ def test_crash_penalty_only_on_a_wall_ending():
     env = ActionRepeatWrapper(CrashPenaltyWrapper(EndingEnv(True), penalty=10.0), repeat=4)
     env.reset()
     assert env.step(0)[1] == pytest.approx(3.0 - 10.0)
+
+
+def test_hairpin_start_respects_an_explicit_mode():
+    from Agents.wrappers import HairpinStartWrapper
+    env = HairpinStartWrapper(ProgressEnv([0.25] * 5), share=1.0)
+    _, info = env.reset(seed=0, options={'mode': 'grid'})      
+    assert info['progress'] == 0.02 and env.env.modes == ['grid'] and env.hairpin_starts == 0
+
+
+def test_demo_mix_buffer_takes_a_fixed_share_from_the_demos():
+    import torch as th
+    from Agents.demos import DemoMixDictReplayBuffer
+    from stable_baselines3.common.buffers import DictReplayBuffer
+    obs_space = gym.spaces.Dict({'x': gym.spaces.Box(-10, 10, (1,), np.float32)})
+    act_space = gym.spaces.Discrete(3)
+    own = DemoMixDictReplayBuffer(100, obs_space, act_space, device='cpu')
+    own.demo = DictReplayBuffer(20, obs_space, act_space, device='cpu')
+    for buffer, value in ((own, 0.0), (own.demo, 1.0)):   
+        for _ in range(20):
+            o = {'x': np.full((1, 1), value, np.float32)}
+            buffer.add(o, o, np.array([0]), np.array([0.0]), np.array([False]), [{}])
+    own.demo_fraction = 0.25
+    batch = own.sample(32)
+    assert batch.observations['x'].shape[0] == 32
+    assert int(th.sum(batch.observations['x'] == 1.0)) == 8      
+    own.demo_fraction = 0.0
+    assert int(th.sum(own.sample(32).observations['x'] == 1.0)) == 0
+
+
+def margin_dqn_with_demos(action=3):
+    """A small MarginDQN on the fake env, with 64 demo transitions that all use `action`."""
+    from stable_baselines3.common.buffers import DictReplayBuffer
+    from Agents.demos import DemoMixDictReplayBuffer
+    from Agents.dqfd import MarginDQN
+    driver = SB3Driver(FakeRaceEnv(with_lidar=False), model_class=MarginDQN, wrappers=dqn_wrappers(False),
+                       buffer_size=200, seed=0, replay_buffer_class=DemoMixDictReplayBuffer)
+    model = driver.model
+    buffer = model.replay_buffer
+    buffer.demo = DictReplayBuffer(64, buffer.observation_space, buffer.action_space, device='cpu')
+    rng = np.random.default_rng(0)
+    for _ in range(64):
+        obs = {'pose': rng.normal(size=(1, 6)), 'velocity': rng.normal(size=(1, 6)), 'time': np.zeros((1, 1), np.float32)}
+        buffer.demo.add(obs, obs, np.array([action]), np.array([0.1]), np.array([False]), [{}])
+    return model
+
+
+def test_margin_loss_is_zero_only_when_the_demo_action_wins_by_the_margin():
+    import torch as th
+    from stable_baselines3.common.type_aliases import DictReplayBufferSamples
+    model = margin_dqn_with_demos()
+    data = model.replay_buffer.demo.sample(8)
+    with th.no_grad():                        
+        last = model.q_net.q_net[-1]
+        last.weight.zero_()
+        last.bias.zero_()
+        last.bias[3] = 1.0
+    zero_target = DictReplayBufferSamples(data.observations, data.actions, data.next_observations,
+                                          th.ones_like(data.dones), data.rewards)
+    _, _, margin_loss = model._losses(zero_target, n_demo=8)
+    assert float(margin_loss) == pytest.approx(0.0)
+    with th.no_grad():
+        last.bias[3] = 0.5                     # wins by only 0.5 < margin 0.8 -> loss 0.3
+    _, _, margin_loss = model._losses(zero_target, n_demo=8)
+    assert float(margin_loss) == pytest.approx(0.3, abs=1e-5)
+
+
+def test_pretraining_on_demos_makes_the_greedy_action_the_demo_action():
+    model = margin_dqn_with_demos(action=3)
+    first, last = model.pretrain_on_demos(300, batch_size=32)
+    assert last < first
+    assert model.demo_agreement() >= 0.95

@@ -53,14 +53,16 @@ def evals(folder):
                      min(e['progress'] for e in eps), max(e['progress'] for e in eps),
                      sum(e['lap_completed'] for e in eps), len(eps),
                      sum(e['collisions'] for e in eps) / len(eps),
-                     sum(e['sim_time'] for e in eps) / len(eps)))
+                     sum(e['sim_time'] for e in eps) / len(eps),
+                     sum(e['progress'] > 0.37 for e in eps)))   # got ~3 m past the first hairpin apex (0.351)
     if not rows:
         print(f'no results in {folder} (did the evaluations fail? run one without "> /dev/null")')
         return
-    print(f'{"run":26s} {"step":>7s}  mean_progress  (min-max)      laps   collisions  mean episode s')
+    print(f'{"run":26s} {"step":>7s}  mean_progress  (min-max)      laps   collisions  mean episode s  past hairpin')
     for r in sorted(rows):
         step = 'final' if r[1] < 0 else str(r[1])
-        print(f'{r[0]:26s} {step:>7s}      {r[2]:.3f}     ({r[3]:.3f}-{r[4]:.3f})  {r[5]}/{r[6]}     {r[7]:.1f}        {r[8]:.1f}')
+        print(f'{r[0]:26s} {step:>7s}      {r[2]:.3f}     ({r[3]:.3f}-{r[4]:.3f})  {r[5]}/{r[6]}     {r[7]:.1f}        '
+              f'{r[8]:6.1f}       {r[9]}/{r[6]}')
 
 
 if __name__ == '__main__':

@@ -5,7 +5,8 @@ from functools import partial
 from pathlib import Path
 
 from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper, dqn_wrappers
-from Agents.demos import DemoKeepingDictReplayBuffer, collect_ftg_demos
+from Agents.dqfd import MarginDQN
+from Agents.demos import DemoKeepingDictReplayBuffer, DemoMixDictReplayBuffer, collect_ftg_demos, collect_takeover_demos
 from Agents.wrappers import (FlattenActionWrapper, DiscreteActionWrapper, CrashPenaltyWrapper, HairpinStartWrapper,
                              StartModeWrapper)
 from stable_baselines3 import PPO, DQN, SAC
@@ -33,7 +34,7 @@ def dqn_scenario(lidar=False):
 
 
 class EvalCheckpoint(BaseCallback):
-    """every steps, save the model (no replay buffer) as <prefix>_<step>_steps.zip.
+    """Every `every` steps, save the model (no replay buffer) as <prefix>_<step>_steps.zip.
 
     Counts with the model's total step counter, so the files stay on multiples of `every`
     after a resume too (SB3's CheckpointCallback restarts its own counter).
@@ -91,7 +92,8 @@ def checkpoint_dir(save_path):
 def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_000,
               lidar=False, seed=None, eval_every=0, resume_every=0, resume=False,
               action_repeat=1, target_update_interval=10_000, train_start='grid', demo_episodes=0,
-              demo_laps=0, hairpin_share=0.5, init_from=None, crash_penalty=0.0):
+              demo_laps=0, hairpin_share=0.5, init_from=None, crash_penalty=0.0, takeover_demos=0,
+              takeover_points=(0.24, 0.26, 0.28), demo_fraction=0.2, margin_loss=0.0, demo_pretrain_steps=0):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -122,32 +124,56 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
 
     crash_penalty=P subtracts P from the training reward on a wall hit that ends
     the episode. 0 turns it off.
+
+    takeover_demos=K collects K successful hairpin demos before training.
+    use init_from and lidar. the loaded model drives from the grid, then
+    FTG takes over at the progress values in takeover_points, cycling
+    through them across runs. FTG uses DQN's actions. demo_fraction sets
+    how much of each training batch comes from the separate demo buffer
+    (see Agents/demos.py).
+
+    margin_loss=W adds the DQfD loss on takeover demos with weight W.
+    it pushes the demo action 0.8 above the other Q-values (Agents/dqfd.py).
+    with margin_loss on, demo_pretrain_steps=N runs N updates on demo-only
+    batches before DQN starts driving.
     """
     log_dir = REPO_ROOT / 'logs' / ('dqn_lidar' if lidar else 'dqn')
     folder = checkpoint_dir(save_path)
     penalty = None
     if crash_penalty:
-        env = penalty = CrashPenaltyWrapper(env, penalty=crash_penalty)   
+        env = penalty = CrashPenaltyWrapper(env, penalty=crash_penalty)   # innermost: one penalty per crash
     starts = None
     if train_start == 'hairpin':
-        env = starts = HairpinStartWrapper(env, share=hairpin_share) 
+        env = starts = HairpinStartWrapper(env, share=hairpin_share)   # training only
     elif train_start != 'grid':
-        env = StartModeWrapper(env, mode=train_start)   #training only, not part of dqn_wrappers
+        env = StartModeWrapper(env, mode=train_start)   # training only, not part of dqn_wrappers
     if init_from:
         check_init_model(init_from, lidar, action_repeat)
-        extra_init = {'exploration_initial_eps': 0.05}  
+        extra_init = {'exploration_initial_eps': 0.05}   # = the usual final value
     else:
         extra_init = {}
     if demo_episodes and demo_laps:
         raise ValueError('use either --demo-episodes or --demo-laps, not both')
-    extra = {'replay_buffer_class': DemoKeepingDictReplayBuffer} if (demo_episodes or demo_laps) else {}
+    if takeover_demos and (demo_episodes or demo_laps):
+        raise ValueError('use either --takeover-demos or --demo-episodes/--demo-laps, not both')
+    if takeover_demos and not init_from:
+        raise ValueError('--takeover-demos needs --init-from (the trained model drives before the handover)')
+    if (margin_loss or demo_pretrain_steps) and not takeover_demos:
+        raise ValueError('--margin-loss / --demo-pretrain-steps need --takeover-demos')
+    model_class = MarginDQN if margin_loss else DQN
+    if takeover_demos:
+        extra = {'replay_buffer_class': DemoMixDictReplayBuffer}
+    elif demo_episodes or demo_laps:
+        extra = {'replay_buffer_class': DemoKeepingDictReplayBuffer}
+    else:
+        extra = {}
     driver = SB3Driver(
-        env, model_class=DQN, wrappers=dqn_wrappers(lidar, action_repeat), verbose=1,
+        env, model_class=model_class, wrappers=dqn_wrappers(lidar, action_repeat), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
         target_update_interval=target_update_interval, **extra, **extra_init,
     )
     if init_from:
-        driver.model.set_parameters(str(init_from), exact_match=True) 
+        driver.model.set_parameters(str(init_from), exact_match=True)   # weights only, fresh replay buffer
     try:
         if resume:
             state_file = folder / 'resume' / 'state.json'
@@ -157,12 +183,15 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             state = json.loads(state_file.read_text())
             config = json.loads((folder / 'config.json').read_text())
             defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid', 'demo_episodes': 0,
-                        'demo_laps': 0, 'hairpin_share': None, 'init_from': None, 'crash_penalty': 0.0}
+                        'demo_laps': 0, 'hairpin_share': None, 'init_from': None, 'crash_penalty': 0.0,
+                        'takeover_demos': 0, 'demo_fraction': None, 'margin_loss': 0.0, 'demo_pretrain_steps': 0}
             settings = (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start),
                         ('demo_episodes', demo_episodes), ('demo_laps', demo_laps),
                         ('hairpin_share', hairpin_share if train_start == 'hairpin' else None),
                         ('init_from', str(init_from) if init_from else None),
-                        ('crash_penalty', float(crash_penalty)))
+                        ('crash_penalty', float(crash_penalty)), ('takeover_demos', takeover_demos),
+                        ('demo_fraction', demo_fraction if takeover_demos else None),
+                        ('margin_loss', float(margin_loss)), ('demo_pretrain_steps', demo_pretrain_steps))
             for key, value in settings:
                 if config.get(key, defaults[key]) != value:
                     raise ValueError(f'this run was started with {key}={config.get(key)}; '
@@ -170,7 +199,7 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             if state['total_timesteps'] != total_timesteps:
                 raise ValueError(f"the checkpoint belongs to a {state['total_timesteps']}-step plan; "
                                  f"pass --timesteps {state['total_timesteps']} to resume it")
-            driver.model = DQN.load(folder / 'resume' / 'model.zip', env=driver.env,
+            driver.model = model_class.load(folder / 'resume' / 'model.zip', env=driver.env,
                                     tensorboard_log=str(log_dir))
             driver.model.load_replay_buffer(folder / 'resume' / 'replay_buffer.pkl')
             if driver.model.buffer_size != buffer_size:
@@ -192,6 +221,23 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                       f"{demos['decisions']} decisions ({demos['simulated_steps']} simulated steps), laps completed "
                       f"{demos['laps_completed']}/{demos['episodes']}, progress {demos['progress']}; "
                       f"discarded {demos['discarded']}", flush=True)
+            if takeover_demos:
+                demos = collect_takeover_demos(driver.model, driver.env, takeover_demos, tuple(takeover_points),
+                                               demo_fraction)
+                print(f"[takeover demos] kept {demos['episodes']} of {demos['attempts']} runs "
+                      f"(seeds {demos['seeds'][0]}-{demos['seeds'][-1]}), {demos['decisions']} decisions, "
+                      f"{demo_fraction:.0%} of every batch; failed {demos['failed']}", flush=True)
+                if margin_loss:
+                    driver.model.margin_weight = float(margin_loss)
+                    demos['agreement_before'] = driver.model.demo_agreement()
+                    if demo_pretrain_steps:
+                        first, last = driver.model.pretrain_on_demos(demo_pretrain_steps)
+                        demos['pretrain_margin_loss'] = [round(first, 4), round(last, 4)]
+                    demos['agreement_after_pretrain'] = driver.model.demo_agreement()
+                    print(f"[margin loss] weight {margin_loss}, pretrain {demo_pretrain_steps} steps "
+                          f"(margin loss {demos.get('pretrain_margin_loss')}); greedy action = demo action in "
+                          f"{demos['agreement_before']:.0%} -> {demos['agreement_after_pretrain']:.0%} of demo states",
+                          flush=True)
             folder.mkdir(parents=True, exist_ok=True)
             (folder / 'config.json').write_text(json.dumps({
                 'algorithm': 'DQN', 'lidar': lidar, 'scenario': os.path.basename(dqn_scenario(lidar)),
@@ -203,6 +249,9 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                 'hairpin_share': hairpin_share if train_start == 'hairpin' else None,
                 'init_from': str(init_from) if init_from else None,
                 'crash_penalty': float(crash_penalty),
+                'takeover_demos': takeover_demos, 'demo_fraction': demo_fraction if takeover_demos else None,
+                'takeover_points': list(takeover_points) if takeover_demos else None,
+                'margin_loss': float(margin_loss), 'demo_pretrain_steps': demo_pretrain_steps,
                 'exploration_initial_eps': driver.model.exploration_initial_eps,
                 'eval_every': eval_every, 'resume_every': resume_every, 'save_path': str(save_path),
             }, indent=2))
@@ -217,7 +266,7 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
         driver.train(total_timesteps=total_timesteps - done, callback=callbacks or None,
                      reset_num_timesteps=not resume)
         driver.save(save_path)
-        if starts is not None or penalty is not None:  
+        if starts is not None or penalty is not None:   # what really happened during training
             config = json.loads((folder / 'config.json').read_text())
             if starts is not None:
                 config['start_counts_this_process'] = {'hairpin': starts.hairpin_starts, 'grid': starts.grid_starts}
@@ -226,6 +275,7 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             (folder / 'config.json').write_text(json.dumps(config, indent=2))
     finally:
         driver.env.close()
+
 
 def check_init_model(init_from, lidar, action_repeat):
     """The model we fine-tune from must have been trained with the same observation and action repeat."""
@@ -272,6 +322,16 @@ if __name__ == '__main__':
                         help='with --train-start hairpin: share of episodes starting before the hairpin')
     parser.add_argument('--crash-penalty', type=float, default=0.0,
                         help='subtract this from the reward when an episode ends at a wall (0 = off)')
+    parser.add_argument('--takeover-demos', type=int, default=0,
+                        help='collect N hairpin demos where FTG takes over from the --init-from model (0 = off)')
+    parser.add_argument('--takeover-points', nargs='+', type=float, default=[0.24, 0.26, 0.28],
+                        help='progress values where FTG takes over, used in turn')
+    parser.add_argument('--demo-fraction', type=float, default=0.2,
+                        help='with --takeover-demos: share of every training batch taken from the demos')
+    parser.add_argument('--margin-loss', type=float, default=0.0,
+                        help='with --takeover-demos: weight of the DQfD large-margin loss on demo samples (0 = off)')
+    parser.add_argument('--demo-pretrain-steps', type=int, default=0,
+                        help='with --margin-loss: updates on demo-only batches before training starts')
     parser.add_argument('--init-from', default=None,
                         help='fine-tune from this trained model .zip (same --lidar / --action-repeat)')
     parser.add_argument('--demo-episodes', type=int, default=0,
@@ -303,4 +363,7 @@ if __name__ == '__main__':
               eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume,
               action_repeat=args.action_repeat, target_update_interval=args.target_update_interval,
               train_start=args.train_start, demo_episodes=args.demo_episodes, demo_laps=args.demo_laps,
-              hairpin_share=args.hairpin_share, init_from=args.init_from, crash_penalty=args.crash_penalty)
+              hairpin_share=args.hairpin_share, init_from=args.init_from, crash_penalty=args.crash_penalty,
+              takeover_demos=args.takeover_demos, takeover_points=args.takeover_points,
+              demo_fraction=args.demo_fraction, margin_loss=args.margin_loss,
+              demo_pretrain_steps=args.demo_pretrain_steps)

@@ -173,6 +173,8 @@ class HairpinStartWrapper(gym.Wrapper):
     def reset(self, *, seed=None, options=None):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
+        if options and 'mode' in options:   # an explicit start (e.g. demonstrations from the grid) wins
+            return self.env.reset(seed=seed, options=options)    
         if self.rng.random() >= self.share:
             self.grid_starts += 1
             return self.env.reset(seed=seed, options=dict(options or {}, mode='grid'))
