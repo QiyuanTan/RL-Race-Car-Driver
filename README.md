@@ -1,5 +1,27 @@
 # RL-Race-Car-Driver
 
+We built and tested race car controllers on the Austria track in [racecar_gym](https://github.com/axelbr/racecar_gym). The project includes a rule-based Follow-the-Gap baseline, DQN with several observation modes, and PPO and SAC implementations.
+
+## Branches
+
+We submit the `final` branch. The table shows where each part of the project was developed.
+
+| Branch | Adds | Built on |
+| --- | --- | --- |
+| `main`, `SAC` | _TODO (Qiyuan)_ | - |
+| `DQN` | _TODO (Qiyuan)_ | `main` |
+| `baseline-Elaine` | Follow-the-Gap driver, `evaluate_baseline.py`, unit tests | `SAC` |
+| `jx_smoothness_metrics` | _TODO (Jayden)_ | `baseline-Elaine` |
+| `dqn-lidar` | DQN + LiDAR, action repeat, eval / resume checkpoints, `evaluate_sb3.py`, random starts, FTG demos | `jx_smoothness_metrics`, `DQN` |
+| `dqn-track` | Track-relative observations (`--obs-mode track`, `track-lookahead`) | `dqn-lidar` |
+| `dqn-lidar-hairpin` | Hairpin fine-tuning options and analysis tools | `dqn-lidar` |
+| `jx_dqn_improvement` | _TODO (Jayden)_ | `dqn-track` |
+| `comparison-matrix` | _TODO (Jack)_ | `dqn-lidar` |
+| `comparison-interface-track` | _TODO (Jack)_ | `jx_dqn_improvement` |
+| `final` | `comparison-interface-track` with `dqn-lidar-hairpin` merged in | both |
+
+The final branch merges the hairpin work into `comparison-interface-track`, which already has the newer comparison document.
+
 ## Setup
 
 Have virtual env setup with Python <= 3.9. racecar_gym was last updated in 3 years ago so you might encounter 
@@ -12,6 +34,23 @@ git clone https://github.com/axelbr/racecar_gym.git
 pip install -e racecar_gym
 pip install -r requirements.txt
 ```
+
+Run the unit tests:
+
+```bash
+python -m pytest tests -q
+```
+
+## Non-RL baseline: Follow-the-Gap
+
+Follow-the-Gap uses LiDAR and vehicle speed to find an open gap and steer towards it. Our turn-in rule helps the car start turning before it reaches the wall at the hairpin. FTG needs no training. These commands test it with and without the rule:
+
+```bash
+python evaluate_baseline.py --episodes 10 --seed 100 --workers 4
+python evaluate_baseline.py --episodes 10 --seed 100 --workers 4 --param turn_in_distance=0  # plain FTG
+```
+
+FTG keeps driving after wall contact, so we count contacts over the full run. Results go to `results/baseline_ftg/`. See [BASELINE.md](BASELINE.md) for the baseline results.
 
 ## Model Definition
 
@@ -93,69 +132,58 @@ memory.
 
 ### DQN with LiDAR observations
 
-`train.py` takes command-line options. Without options it still trains base DQN for 1M steps
-and saves `models/dqn_model.zip`. `--lidar` uses `scenarios/austria_lidar.yml` (same as
-`austria.yml` plus the `lidar` sensor) and adds `LidarObservationWrapper`, which scales the
-1080 distances (metres) to `[0, 1]` float32. Actions, reward, termination and budget are
-unchanged, so the two variants differ only in the LiDAR input.
+Running `python train.py` without flags trains base DQN for 1M steps and saves `models/dqn_model.zip`. Add `--lidar` to use `scenarios/austria_lidar.yml` and give DQN the LiDAR distances scaled to `[0, 1]`. The two commands below use the same actions, reward, episode rules, and budget.
 
 ```bash
 python train.py --timesteps 200000 --seed 0 --save-path models/dqn_model
 python train.py --lidar --timesteps 200000 --seed 0 --save-path models/dqn_lidar_model
 ```
 
-Optional checkpoints (off by default), stored in `models/checkpoints/<save-path name>/`:
+Checkpoints and run settings go in `models/checkpoints/<save-path name>/`.
 
-- `--eval-every N`: every N steps save `eval/<name>_<step>_steps.zip` (model only, about 40 MB),
-  which `evaluate_sb3.py --model ...` can evaluate.
-- `--resume-every N`: every N steps save `resume/` (model + replay buffer, about 1 GB),
-  keeping only the latest copy. After an interruption, run the same command with `--resume`
-  (same `--timesteps`): the step count and exploration schedule continue from the saved step.
-  Steps after the last resumable checkpoint are redone.
-- `config.json` records the run settings (variant, scenario, timesteps, seed, buffer size).
+- `--eval-every N` saves a model checkpoint every N decisions for evaluation.
+- `--resume-every N` saves the latest model and replay buffer. To resume, add `--resume` to the same command and keep `--timesteps` the same.
+- `config.json` records the training settings.
 
 ```bash
 python train.py --timesteps 200000 --seed 0 --save-path models/dqn_model --eval-every 20000 --resume-every 100000
 python train.py --timesteps 200000 --seed 0 --save-path models/dqn_model --eval-every 20000 --resume-every 100000 --resume
 ```
 
-`--action-repeat N` holds each DQN decision for N simulator steps (N=4 -> 25 Hz, the LiDAR
-update rate). SB3 then counts decisions, so `--timesteps`, `--buffer-size` and
-`--target-update-interval` are in decisions; `config.json` also records `simulated_steps`.
-Evaluate such a model with the same `--action-repeat` (checked against `config.json`).
-Smoothness is measured per simulator step, so it is only comparable between runs with the
-same action repeat.
+- `--action-repeat N` holds each action for N simulator steps. The training budget, replay buffer size, and target-network update interval count decisions. Use the same action repeat when evaluating a model.
+- `--train-start random` gives the car practice from different points on the track. Evaluation starts from the grid.
+- `--demo-episodes K` fills part of the LiDAR replay buffer with FTG runs using the same actions and action repeat as DQN. `--demo-laps K` keeps complete laps only.
 
-`--train-start random` starts each training episode at a random point of the track
-(racecar_gym's `random` reset mode, facing forward), so later sections such as the hairpin are
-practised too. Evaluation always starts from the grid. Recorded as `train_start` in `config.json`.
-
-`--demo-episodes K` (LiDAR only) prefills the replay buffer with K episodes driven by FTG
-restricted to DQN's discrete actions and the same action repeat (seeds 1000, 1001, ...). The
-demo transitions occupy the first slots of the buffer for the whole run; DQN's own transitions
-use the remaining `buffer_size - demo decisions` slots. `config.json` records the demo episodes,
-decisions and simulated steps next to `online_decisions` (DQN's own training decisions).
-`--demo-laps K` instead keeps only demo episodes that complete a full lap (failed tries are
-discarded, at most 10 tries); the discarded seeds are listed in `config.json`.
-
-Evaluate with the same episode loop as the FTG baseline (`evaluate_baseline.run_episode`);
-seeds 100-109 match the FTG test seeds:
+These commands evaluate the base and LiDAR models on the same test seeds used for FTG:
 
 ```bash
 python evaluate_sb3.py --model models/dqn_model.zip --episodes 10 --seed 100 --workers 4
 python evaluate_sb3.py --model models/dqn_lidar_model.zip --lidar --episodes 10 --seed 100 --workers 4
 ```
 
-The DQN scenarios end an episode at the first wall contact, so `collisions` is 0 or 1 and
-`progress` shows how far the car got.
+DQN episodes stop at the first wall contact. Progress shows how far the car got before the episode ended.
 
 ### DQN with track-relative / look-ahead observations
 
-`--obs-mode track` adds 5 numbers describing the car relative to the track centre line (offset,
-heading error, velocity along/across the track); `--obs-mode track-lookahead` also adds the
-centre line points 1-8 m ahead in the car's frame. Both use a centre line extracted from
-racecar_gym's map (`scenarios/austria_centerline.npz`), so these are map-based policies. The old
-`--lidar` flag still works (`--obs-mode lidar`). Details, checks and commands: [DQN_TRACK.md](DQN_TRACK.md).
+`--obs-mode track` adds the car's offset, heading, and velocity relative to the centre line. `--obs-mode track-lookahead` also gives it centre line points 1–8 m ahead. Both use `scenarios/austria_centerline.npz`. `--lidar` is equivalent to `--obs-mode lidar`. See [DQN_TRACK.md](DQN_TRACK.md) for the setup and commands.
+
+### DQN hairpin fine-tuning
+
+The LiDAR DQN reached the first hairpin at about 35% progress but could not get through it. We tried these options to train it on the turn:
+
+- `--init-from <model.zip>` loads a trained model and starts with 5% exploration. Match the observation mode and action repeat used in training.
+- `--train-start hairpin` starts some training episodes just before the turn. `--hairpin-share` defaults to 0.5.
+- `--crash-penalty P` subtracts P from the reward on a wall hit that ends the episode.
+- `--takeover-demos K` collects K successful FTG takeovers from the trained LiDAR model. It uses `--takeover-points` and samples a share of each batch from the demos, set by `--demo-fraction`.
+- `--margin-loss W` adds a DQfD loss on demo samples. `--demo-pretrain-steps N` runs N updates on demos before regular training.
+
+The settings are saved in `config.json`. Evaluation still starts from the grid.
+
+```bash
+python train.py --lidar --action-repeat 4 --target-update-interval 2500 --timesteps 100000 --seed 0 --save-path models/dqn_lidar_ar4_ft_hairpin --train-start hairpin --init-from models/checkpoints/dqn_lidar_ar4_long/eval/dqn_lidar_ar4_long_140000_steps.zip --eval-every 10000 --resume-every 50000
+```
+
+See [DQN_LIDAR.md](DQN_LIDAR.md) for the hairpin experiments, results, and analysis commands.
 
 To view training metrics, run:
 
@@ -219,3 +247,36 @@ need to update the evaluator first.
 
 FTG and RL currently use different collision rules, and action repeat affects
 smoothness. Keep that in mind when comparing results.
+
+## Results
+
+_TODO: final comparison table (see COMPARISON_MATRIX.md)._
+
+We tested on Austria from the grid with seeds 100–109. Each DQN setup used one training seed, and we chose checkpoints on validation seeds 0–9. Progress is the average fraction of a lap completed.
+
+| Method | Decision every | Checkpoint | Progress (min-max) | Laps | Collision-free laps |
+| --- | --- | --- | --- | --- | --- |
+| FTG (turn-in rule) | 1 step | - | 100% | 10/10, 81.77 ± 0.77 s | 10/10 |
+| FTG (plain) | 1 step | - | 100% | 10/10, 68.56 ± 0.35 s | 2/10 |
+| Base DQN | 1 step | 20k | 12.6% (12.2-12.8) | 0/10 | 0/10 |
+| DQN + LiDAR | 1 step | 200k | 8.7% (7.4-9.4) | 0/10 | 0/10 |
+| Base DQN | 4 steps | 200k | 21.9% (9.2-35.5) | 0/10 | 0/10 |
+| DQN + LiDAR | 4 steps | 140k | 35.3% (34.9-35.4) | 0/10 | 0/10 |
+| DQN + track | 4 steps | 140k | 34.4% | 0/10 | 0/10 |
+| LiDAR, hairpin fine-tuning (grid starts / hairpin starts / crash penalty) | 4 steps | validation | 35.4% | 0/10 | 0/10 |
+| LiDAR, takeover demos + margin loss | 4 steps | validation | 17.7% | 0/10 | 0/10 |
+
+In the runs shown here, DQN did not get past the first hairpin. FTG often made the turn with the same 15 actions and action repeat, so we checked how the DQN approached it. The hairpin fine-tuning runs still did not get it through.
+
+## Use of AI tools
+
+We used AI tools to draft unit tests and organise the Markdown documentation. We reviewed the tests and ran the experiments ourselves. The numbers above come from the files in `results/`.
+
+- TODO: any other AI use for their own part
+
+## References
+
+- racecar_gym: https://github.com/axelbr/racecar_gym
+- Stable-Baselines3: https://github.com/DLR-RM/stable-baselines3
+- T. Hester et al. Deep Q-learning from Demonstrations. AAAI 2018 (margin loss).
+- _TODO: other references._
