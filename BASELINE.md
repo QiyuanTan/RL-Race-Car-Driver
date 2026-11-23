@@ -79,15 +79,13 @@ All three settings were run on the same machine (M1 Mac, Python 3.9, conda-forge
   45 deg at once when a wall gets close. It trades steering smoothness for safety.
 - `max_speed=4.0` was also collision-free on these seeds and about 4 s faster. It is not the default
   because it was not chosen on the tuning seeds. Picking it now would mean tuning on the test seeds.
-- Plain FTG is right at the limit at the hairpin, so its collision count depends on the machine: the same
-  seeds gave 8/10 collision-free laps on Linux (pybullet 3.2.5) but 2/10 on the M1 Mac. The default setting
-  was collision-free on both.
+- Plain FTG is right at the limit at the hairpin: it gets through, but often touches the wall on the way.
+  The turn-in rule fixes this.
 
 ## Limitations
 
 - Only tested on Austria with the grid start.
 - The turn-in distance (3.5 m) was tuned for this track.
 - The car cannot reverse. If it ever gets stuck against a wall, it stays there until the time limit.
-- Results differ between machines and pybullet versions (e.g. seed 100: 81.34 s on Linux / pybullet 3.2.5,
-  81.77 s on the M1 Mac; plain FTG collisions differ even more, see above). Compare all methods on one machine.
+- Results can differ between machines and pybullet versions, so compare all methods on one machine.
 - The driver only reads `lidar` and `velocity` from the observation, never `info`.
