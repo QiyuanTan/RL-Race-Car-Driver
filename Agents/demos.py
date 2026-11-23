@@ -7,6 +7,7 @@ training wrapper(same action repeat,same lidar scaling)
 """
 import gymnasium as gym
 import numpy as np
+import torch as th
 from stable_baselines3.common.buffers import DictReplayBuffer
 
 from Agents.FollowTheGapDriver import FollowTheGapDriver
@@ -116,4 +117,112 @@ def collect_ftg_demos(model, wrapped_env, episodes=0, laps=0, max_attempts=10,
     if laps and summary['laps_completed'] < laps:
         raise RuntimeError(f"only {summary['laps_completed']} of {laps} demo laps completed in "
                            f'{max_attempts} tries: {summary}')
+    return summary
+
+
+class DemoMixDictReplayBuffer(DictReplayBuffer):
+    """Normal replay buffer + a separate buffer of demonstrations.
+    sample demo_fraction of each batch from the demos so successful
+    hairpin runs keep showing up throughout training.
+    """
+
+    demo = None            #set by collect_takeover_demos
+    demo_fraction = 0.0
+
+    last_n_demo = 0        #number of demo samples at the end of the last batch
+
+    def sample(self, batch_size, env=None):
+        n_demo = int(round(batch_size * self.demo_fraction)) if self.demo is not None and self.demo.size() else 0
+        self.last_n_demo = n_demo
+        own = super().sample(batch_size - n_demo, env=env)
+        if n_demo == 0:
+            return own
+        demo = self.demo.sample(n_demo, env=env)
+
+        def join(a, b):
+            if isinstance(a, dict):
+                return {key: th.cat([a[key], b[key]]) for key in a}
+            return th.cat([a, b])
+        return type(own)(*[join(a, b) for a, b in zip(own, demo)])
+
+
+def drive_takeover_episode(vec_env, model, ftg, discrete, lidar, seed, handover, stop_at=0.40):
+    """let DQN drive from the grid until progress reaches handover.
+
+    FTG takes over at the next decision using DQN's actions.
+    return the FTG transitions, whether it passed, and the last info.
+    """
+    np.random.seed(seed)
+    vec_env.seed(seed)
+    vec_env.set_options({'mode': 'grid'})
+    obs = vec_env.reset()
+    ftg.reset()
+    transitions, handed_over, info = [], False, {'progress': 0.0}   #grid starts at ~0.016
+    while True:
+        if not handed_over and info['progress'] >= handover:
+            handed_over = True
+        if handed_over:
+            scan = lidar._low + obs['lidar'][0].astype(np.float64) * (lidar._high - lidar._low)
+            action = np.array([nearest_action_id(discrete._actions, ftg.act({'lidar': scan, 'velocity': obs['velocity'][0]}))])
+        else:
+            action, _ = model.predict(obs, deterministic=True)
+        new_obs, rewards, dones, infos = vec_env.step(action)
+        info, done = infos[0], bool(dones[0])
+        if handed_over:
+            next_obs = {key: value.copy() for key, value in new_obs.items()}
+            if done:   #auto-reset already ran, so get the last obs from info
+                for key, value in info['terminal_observation'].items():
+                    next_obs[key] = value[np.newaxis]
+            transitions.append((obs, next_obs, action, rewards, dones, infos))
+        obs = new_obs
+        if done:
+            return transitions, False, info               #crash or timeout
+        if info['progress'] < 0.5 and info['progress'] >= stop_at:
+            return transitions, True, info                #past the hairpin, stop here
+
+
+def collect_takeover_demos(model, wrapped_env, episodes, handovers=(0.24, 0.26, 0.28), demo_fraction=0.2,
+                           max_attempts=None, seed_start=DEMO_SEED_START):
+    """collect FTG demos starting from states the trained DQN reaches.
+
+    cycle through handovers and keep successful runs from takeover to
+    progress 0.40. save them in a separate buffer for demo_fraction
+    of each batch. load trained weights with --init-from first.
+    return the counts and seeds for config.json.
+    """
+    discrete = find_wrapper(wrapped_env, DiscreteActionWrapper)
+    try:
+        lidar = find_wrapper(wrapped_env, LidarObservationWrapper)
+    except LookupError:
+        raise ValueError('takeover demonstrations need the LiDAR scan: use --lidar') from None
+    buffer = model.replay_buffer
+    if not isinstance(buffer, DemoMixDictReplayBuffer):
+        raise TypeError('takeover demonstrations need replay_buffer_class=DemoMixDictReplayBuffer')
+    ftg = FollowTheGapDriver()
+    max_attempts = max_attempts or 2 * episodes
+    kept, summary = [], {'episodes': 0, 'seeds': [], 'handovers': [], 'decisions': 0, 'failed': [],
+                         'attempts': 0, 'demo_fraction': demo_fraction}
+    for attempt in range(max_attempts):
+        seed, handover = seed_start + attempt, handovers[attempt % len(handovers)]
+        transitions, passed, info = drive_takeover_episode(model.env, model, ftg, discrete, lidar, seed, handover)
+        summary['attempts'] += 1
+        if not passed:
+            summary['failed'].append({'seed': seed, 'handover': handover, 'progress': round(float(info['progress']), 3)})
+            continue
+        kept.append(transitions)
+        summary['episodes'] += 1
+        summary['seeds'].append(seed)
+        summary['handovers'].append(handover)
+        summary['decisions'] += len(transitions)
+        if summary['episodes'] == episodes:
+            break
+    if summary['episodes'] < episodes:
+        raise RuntimeError(f"only {summary['episodes']} of {episodes} takeover demos got through the hairpin "
+                           f'in {max_attempts} tries: {summary}')
+    buffer.demo = DictReplayBuffer(summary['decisions'], buffer.observation_space, buffer.action_space,
+                                   device=buffer.device, n_envs=1)
+    for transitions in kept:
+        for transition in transitions:
+            buffer.demo.add(*transition)
+    buffer.demo_fraction = demo_fraction
     return summary
