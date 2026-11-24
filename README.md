@@ -1,6 +1,6 @@
 # RL-Race-Car-Driver
 
-We built and tested race car controllers on the Austria track in [racecar_gym](https://github.com/axelbr/racecar_gym). The project includes a rule-based Follow-the-Gap baseline, DQN with several observation modes, and PPO and SAC implementations.
+We built and tested race car controllers on the Austria track in [racecar_gym](https://github.com/axelbr/racecar_gym). The project includes a rule-based Follow-the-Gap baseline, DQN with several observation modes, and a PPO implementation. The analysis and discussion of all results are in our report; this README explains how to run the code.
 
 ## Branches
 
@@ -8,17 +8,18 @@ We submit the `final` branch. The table shows where each part of the project was
 
 | Branch | Adds | Built on |
 | --- | --- | --- |
-| `main`, `SAC` | _TODO (Qiyuan)_ | - |
-| `DQN` | _TODO (Qiyuan)_ | `main` |
+| `main`, `SAC` | Project setup: `SB3Driver`, observation and action wrappers, PPO training helper, `run_sim.py` | - |
+| `DQN` | Base DQN with 15 discrete motor/steering actions on camera and vehicle-state observations | `main` |
 | `baseline-Elaine` | Follow-the-Gap driver, `evaluate_baseline.py`, unit tests | `SAC` |
 | `jx_smoothness_metrics` | Added motor and steering smoothness metrics to measure changes in driving actions | `baseline-Elaine` |
 | `dqn-lidar` | DQN + LiDAR, action repeat, eval / resume checkpoints, `evaluate_sb3.py`, random starts, FTG demos | `jx_smoothness_metrics`, `DQN` |
-| `dqn-track` | Track-relative observations (`--obs-mode track`, `track-lookahead`) | `dqn-lidar` |
+| `dqn-track` | Track-relative observations (`--obs-mode track`, `track-lookahead`); later also the track-lookahead Stage 1 model and mixed-start fine-tuning | `dqn-lidar` |
 | `dqn-lidar-hairpin` | Hairpin fine-tuning options and analysis tools | `dqn-lidar` |
 | `jx_dqn_improvement` | Added signed progress reward, FTG demonstrations for track-lookahead DQN, Behavior Cloning with motor and steering losses, and BC-regularized DQN training | `dqn-track` |
 | `comparison-matrix` | Performance comparison matrix, unified evaluation metrics, lap completion rate, lap time, collision rate, and control smoothness comparison | `dqn-lidar` |
 | `comparison-interface-track` | Comparison interface for track-relative DQN agents, integration with the evaluation framework, and standardized performance comparison across agents | `jx_dqn_improvement` |
-| `final` | `comparison-interface-track` with `dqn-lidar-hairpin` merged in | both |
+| `birdview_features` | Bird's-eye track view and drivable-area observations for PPO and DQN (not included in the report) | `dqn-lidar` |
+| `final` | `comparison-interface-track` with `dqn-lidar-hairpin` merged in, plus the later bird's-eye view, BC models and track-lookahead fine-tuning | all of the above |
 
 The final branch merges the hairpin work into `comparison-interface-track`, which already has the newer comparison document.
 
@@ -70,7 +71,6 @@ Steering varies fastest, so an action ID is decoded as
 | Algorithm | Action wrapper | Action representation |
 | --- | --- | --- |
 | PPO | `FlattenActionWrapper` | Continuous motor and steering commands in a flat `Box` |
-| SAC | `FlattenActionWrapper` | Continuous motor and steering commands in a flat `Box` |
 | DQN | `DiscreteActionWrapper` | 15 discrete combinations of motor and steering commands |
 
 
@@ -89,7 +89,6 @@ python train.py
 | --- | --- | --- |
 | `train_ppo` | `ppo_model.zip` | `logs/ppo/` |
 | `train_dqn` | `dqn_model.zip` | `logs/dqn/` |
-| `train_sac` | `sac_model.zip` | `logs/sac/` |
 
 To select another algorithm, change the call inside the `if __name__ == '__main__':`
 block in `train.py`, creating a fresh environment for each training run:
@@ -99,7 +98,6 @@ env = gym_api.SingleAgentRaceEnv(
     scenario=scenario, render_mode='rgb_array_birds_eye'
 )
 train_ppo(env, total_timesteps=1_000_000, save_path='models/ppo_model')
-# Alternatively, use train_sac(env, ..., save_path='models/sac_model').
 ```
 
 PPO can also train with multiple environment processes. Replace the active
@@ -166,11 +164,11 @@ DQN episodes stop at the first wall contact. Progress shows how far the car got 
 
 `--obs-mode track` adds the car's offset, heading, and velocity relative to the centre line. `--obs-mode track-lookahead` also gives it centre line points 1–8 m ahead. Both use `scenarios/austria_centerline.npz`. `--lidar` is equivalent to `--obs-mode lidar`. See [DQN_TRACK.md](DQN_TRACK.md) for the setup and commands.
 
-We also tested several methods to improve track-lookahead DQN. First, we added a signed progress reward to reward forward movement instead of backward movement. We then used FTG driving demonstrations to train the model with Behavior Cloning (BC). We added motor and steering losses to help the model learn driving actions. We also tested BC-regularized DQN, which keeps an imitation loss during DQN training. The training scripts are train_ftg_bc.py and train_ftg_bc_rl.py. We used evaluate_ftg_bc.py to evaluate these models.
+The signed progress reward (`--reward-mode signed-progress`), FTG Behavior Cloning, and BC-regularized DQN for track-lookahead DQN are trained with `train_ftg_bc.py` and `train_ftg_bc_rl.py` and evaluated with `evaluate_ftg_bc.py`.
 
 ### DQN hairpin fine-tuning
 
-The LiDAR DQN reached the first hairpin at about 35% progress but could not get through it. We tried these options to train it on the turn:
+These options fine-tune a trained DQN on the first hairpin:
 
 - `--init-from <model.zip>` loads a trained model and starts with 5% exploration. Match the observation mode and action repeat used in training.
 - `--train-start hairpin` starts some training episodes just before the turn. `--hairpin-share` defaults to 0.5.
@@ -184,7 +182,7 @@ The settings are saved in `config.json`. Evaluation still starts from the grid.
 python train.py --lidar --action-repeat 4 --target-update-interval 2500 --timesteps 100000 --seed 0 --save-path models/dqn_lidar_ar4_ft_hairpin --train-start hairpin --init-from models/checkpoints/dqn_lidar_ar4_long/eval/dqn_lidar_ar4_long_140000_steps.zip --eval-every 10000 --resume-every 50000
 ```
 
-See [DQN_LIDAR.md](DQN_LIDAR.md) for the hairpin experiments, results, and analysis commands.
+See [DQN_LIDAR.md](DQN_LIDAR.md) for the commands of every run and the analysis tools.
 
 To view training metrics, run:
 
@@ -195,58 +193,22 @@ tensorboard --logdir logs
 For inference, `run_sim.py` provides a simple interface to load a trained model and run it in the simulator.
 
 
-## Track-Lookahead DQN: Yutao Lin's Fine-Tuning Experiment (Fall 2026)
+## Track-Lookahead DQN: mixed-start fine-tuning (Yutao Lin)
 
-This section documents **Yutao Lin's individual track-lookahead DQN experiment**,
-not a final training run or model for the entire team. It builds on the
-track-relative feature representation developed by another team member.
-Both the Stage 1 model and this subsequent fine-tuning experiment use the same
-15-action discrete motor/steering space, `track-lookahead` observations, and
-`action_repeat=4` (four simulator steps per DQN decision). The fine-tuning
-experiment initializes from Yutao's earlier Stage 1 checkpoint.
+This experiment fine-tunes a track-lookahead DQN (Stage 1, 300k decisions) with
+reward shaping, stall detection, and mixed starting positions (40% grid, 35% near
+the hairpin, 25% random). Both models use the 15 discrete actions and
+`action_repeat=4`.
 
-### Models from this experiment
+| Model | Purpose |
+| --- | --- |
+| `models/dqn_centerline_stage1_300k.zip` | Stage 1 model, trained for 300k decisions |
+| `models/dqn_final_best_75k.zip` | Selected checkpoint from the 500k-decision fine-tuning run (75k additional decisions) |
 
-| Model | Purpose | Grid evaluation (10 episodes, seeds 100–109) |
-| --- | --- | --- |
-| `models/dqn_centerline_stage1_300k.zip` | Original Stage 1 baseline, trained for 300k steps | Historical mean progress ~35.1%, best progress ~35.4% |
-| `models/dqn_final_best_75k.zip` | Selected candidate among 20 checkpoints from this fine-tuning experiment | Mean maximum progress **35.45%**, maximum **35.5%**, minimum **35.3%** |
-
-This experiment fine-tuned Stage 1 for **500,000 additional decisions** with
-reward shaping and mixed starting positions. The 75k checkpoint (75k new steps,
-not 75k total training steps) had the highest mean Grid progress among the
-20 evaluated checkpoints. Its performance improvement over the historical Stage 1
-result is small; **the original baseline was not successfully re-evaluated in the
-same checkpoint batch because of a saved training-configuration metadata mismatch**.
-Therefore, these figures are descriptive rather than a verified head-to-head
-improvement. Neither model has demonstrated a completed lap.
-
-### Fine-tuning changes
-
-The standalone fine-tuning script is `train_dqn_final_stall_v2_fixed.py`. It builds on
-Stage 1 with:
-
-- **Progress-oriented reward shaping:** forward progress remains the main
-  incentive, while lateral/heading misalignment, excessive cornering speed,
-  steering/motor oscillations, and wall collisions receive penalties.
-- **Stall detection:** sustained low speed and insufficient net track progress
-  are penalized. Prolonged stuck episodes can be truncated, instead of treating
-  momentary braking or coasting as a stall.
-- **Mixed-start curriculum:** 40% Grid, 35% hairpin-area randomized starts
-  (`0.26–0.31` environment progress), and 25% other random starts. This was
-  intended to preserve early-track performance while exposing the policy to
-  the challenging turn.
-- **Checkpointing:** evaluation model snapshots every 25k decisions and
-  resumable state snapshots every 10k decisions in the archived run.
-
-The fine-tuning settings were: learning rate `3e-5`, replay buffer `20,000`,
-batch size `64`, target update interval `5,000`, discount factor `0.99`, and
-exploration rate linearly decreased from `0.15` to `0.03` over the first 35%
-of the 500k-step experiment. A smoke test was run before training.
-
-To reproduce the **training configuration** from a retained Stage 1 model,
-run from the repository root (the script saves to a new prefix and should
-not overwrite existing models):
+The fine-tuning script is `train_dqn_final_stall_v2_fixed.py` (learning rate `3e-5`,
+replay buffer `20,000`, batch size `64`, target update interval `5,000`, exploration
+from `0.15` to `0.03` over the first 35% of training). To reproduce the training
+configuration from the Stage 1 model (PowerShell line continuations):
 
 ```powershell
 python train_dqn_final_stall_v2_fixed.py `
@@ -286,57 +248,23 @@ python train_dqn_final_stall_v2_fixed.py `
   --resume-every 10000
 ```
 
-> **Note:** This standalone script creates checkpoints during training, but a
-> `--resume` command for this standalone training script has not been verified.
-> The `train.py --resume` workflow described above is separate.
+`evaluate_final_checkpoints.py` evaluates all saved checkpoints of this run on the
+same grid seeds; the summary is in
+`results/final_checkpoint_grid_eval/checkpoint_comparison.csv`.
 
-### Checkpoint evaluation and limitations
+Known limitations of this part:
 
-For this experiment, we evaluated **20 fine-tuning checkpoints** at 25k intervals, each with 10 Grid
-starts (seeds 100–109), for **200 Grid evaluation episodes**. The best checkpoint
-was the 75k fine-tuning snapshot:
+- The script reads the Stage 1 `config.json` from
+  `models/checkpoints/dqn_centerline_stage1_300k/`, which is not in the repository.
+- `--resume` for this standalone script has not been verified (the `train.py --resume`
+  workflow is separate).
+- Both models were saved with NumPy 1.26.4. With the NumPy 1.22.3 pinned in
+  `requirements.txt`, Stable-Baselines3 cannot load their saved observation space,
+  so they need an environment with NumPy ≥ 1.25.
 
-| Fine-tuning checkpoint | Mean maximum Grid progress | Maximum Grid progress |
-| --- | ---: | ---: |
-| 75k (selected candidate) | **35.45%** | **35.5%** |
-| 175k | 35.40% | 35.5% |
-| 275k | 35.34% | 35.5% |
-| 300k | 35.17% | 35.2% |
-| 500k | 35.24% | 35.4% |
-
-No evaluated checkpoint completed a lap. The dominant failure remains a sharp
-hairpin around 36% environment progress, and this fine-tuning did not establish a
-reliable solution to this turn. Local geometry analysis estimated a minimum
-centre-line radius of about 1.23 m; separate short-turn tests measured transient
-turn radii as low as ~0.98 m. These tests do **not** prove that a complete,
-collision-free path through the hairpin is physically achievable. Speed-only
-interventions and heuristic Pure Pursuit control also failed to pass the turn
-in the exploratory tests. A hairpin-only 100k fine-tuning experiment exhibited
-substantial Grid-performance regression, motivating the mixed-start design.
-
-The checkpoint comparison summary is retained at:
-
-`results/final_checkpoint_grid_eval/checkpoint_comparison.csv`
-
-The full exploratory logs and intermediate checkpoints may be kept in a separate
-local archive to avoid bloating the shared Git repository. If checkpoint
-artifacts have been archived, `evaluate_final_checkpoints.py` requires the
-checkpoint directory to be restored before a full 20-checkpoint evaluation.
-
-### Evaluation compatibility
-
-`evaluate_sb3.py` compares the requested environment against training metadata.
-The Stage 1 model previously produced a mismatch involving `features.obs_mode`
-(`base` versus `track-lookahead`) and missing saved feature keys. This is a
-**configuration-metadata issue that must be investigated**, not a reason to
-silently bypass feature checks. Before evaluating or comparing a model, confirm
-that observation dimensions **and semantics**, action mapping, action repeat,
-centerline data, and preprocessing match those used in training. The original
-Stage 1 evaluation numbers above come from earlier tests, not from this
-20-checkpoint batch.
 ## Shared evaluation interface
 
-`evaluate_shared.py` evaluates FTG, DQN (including `base`, `lidar`, `track`, and `track-lookahead` modes), and PPO/SAC with the existing `evaluate_baseline.run_episode` metrics. For the behavior-cloning geometry-only DQN, use `--obs-mode track-lookahead --geometry-only`. Models must be evaluated with their training-time observation mode, action repeat and feature settings. Saved-model observation and action spaces are checked before evaluation; geometry-only models have no complete configuration check, so the user must supply matching feature settings.
+`evaluate_shared.py` evaluates FTG, DQN (including `base`, `lidar`, `track`, and `track-lookahead` modes), and PPO with the existing `evaluate_baseline.run_episode` metrics. For the behavior-cloning geometry-only DQN, use `--obs-mode track-lookahead --geometry-only`. Models must be evaluated with their training-time observation mode, action repeat and feature settings. Saved-model observation and action spaces are checked before evaluation; geometry-only models have no complete configuration check, so the user must supply matching feature settings.
 
 Examples (install the project dependencies and racecar_gym first):
 
@@ -345,7 +273,6 @@ python evaluate_shared.py --algorithm ftg --episodes 10 --seed 100
 python evaluate_shared.py --algorithm dqn --model path/to/dqn.zip --obs-mode lidar --action-repeat 4
 python evaluate_shared.py --algorithm dqn --model path/to/student.zip --obs-mode track-lookahead --geometry-only --action-repeat 4
 python evaluate_shared.py --algorithm ppo --model models/ppo_model_w_collision.zip
-python evaluate_shared.py --algorithm sac --model path/to/sac.zip
 ```
 
 Each episode uses a fresh process and JSON records the settings, summary and per-episode metrics. These are a common interface, not yet a fully aligned experiment: FTG uses `SingleAgentAustria-v0` and continues after wall contact; the SB3 scenarios terminate at the first contact. Smoothness per simulator step is affected by action repeat. Keep these differences in mind when comparing results.
@@ -390,9 +317,12 @@ smoothness. Keep that in mind when comparing results.
 
 ## Results
 
-_TODO: final comparison table (see COMPARISON_MATRIX.md)._
-
-The initial FTG/DQN comparisons used grid-start evaluation seeds 100–109, with DQN checkpoints selected on validation seeds 0–9. The separately developed track-lookahead DQN experiments used a different evaluation procedure: the Stage 1 result is historical, while the fine-tuned 75k checkpoint was **selected using seeds 100–109**. Its reported progress is therefore a checkpoint-selection result, **not an independent held-out test**. Progress values below are mean lap progress (or mean maximum lap progress for the track-lookahead rows).
+Austria track, grid starts. FTG and the first DQN rows use test seeds 100–109,
+with DQN checkpoints picked on validation seeds 0–9. The track-lookahead
+fine-tuning checkpoint was selected on seeds 100–109, so its number is a
+selection result, not a held-out test. Track-lookahead rows report mean maximum
+progress. See [COMPARISON_MATRIX.md](COMPARISON_MATRIX.md) for smoothness and
+collision metrics, and the report for the discussion.
 
 | Method | Decision every | Checkpoint | Progress (min-max) | Laps | Collision-free laps |
 | --- | --- | --- | --- | --- | --- |
@@ -405,20 +335,6 @@ The initial FTG/DQN comparisons used grid-start evaluation seeds 100–109, with
 | DQN + track | 4 steps | 140k | 34.4% | 0/10 | 0/10 |
 | LiDAR, hairpin fine-tuning (grid starts / hairpin starts / crash penalty) | 4 steps | validation | 35.4% | 0/10 | 0/10 |
 | LiDAR, takeover demos + margin loss | 4 steps | validation | 17.7% | 0/10 | 0/10 |
-| Track-lookahead DQN — Stage 1 | 4 steps | 300k | ~35.1% (historical; range not available) | 0/10 | 0/10 |
-| Track-lookahead DQN — mixed-start fine-tuning | 4 steps | 75k additional (selected from 500k run) | **35.45%** (35.3–35.5) | 0/10 | 0/10 |
+| Track-lookahead DQN — Stage 1 | 4 steps | 300k | ~35.1% | 0/10 | 0/10 |
+| Track-lookahead DQN — mixed-start fine-tuning | 4 steps | 75k additional | 35.45% (35.3–35.5) | 0/10 | 0/10 |
 
-In these runs, no DQN variant completed a lap; the first hairpin remained a major failure point. FTG could navigate it, motivating additional DQN analysis. Yutao's track-lookahead fine-tuning selected the 75k checkpoint from 20 candidates, but did not establish a reliable improvement over the historical Stage 1 baseline; see the individual experiment section above for details.
-
-## Use of AI tools
-
-We used AI tools to draft unit tests and organise the Markdown documentation. We reviewed the tests and ran the experiments ourselves. The numbers above come from the files in `results/`.
-
-- TODO: any other AI use for their own part
-
-## References
-
-- racecar_gym: https://github.com/axelbr/racecar_gym
-- Stable-Baselines3: https://github.com/DLR-RM/stable-baselines3
-- T. Hester et al. Deep Q-learning from Demonstrations. AAAI 2018 (margin loss).
-- _TODO: other references._
