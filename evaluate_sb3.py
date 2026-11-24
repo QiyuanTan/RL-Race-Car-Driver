@@ -54,7 +54,7 @@ def training_config(model_path):
     return json.loads(config.read_text()) if config.exists() else None
 
 """refuse to evaluate with settings that differ from how the model was trained."""
-def check_against_training(model_path, lidar, action_repeat, obs_mode=None):
+def check_against_training(model_path, lidar, action_repeat, obs_mode=None, no_camera=False):
     """Compares the obs mode, every feature setting (names, scales, centre line hash) and the action
     repeat, so e.g. a model trained on an older centre line is refused even if the sizes match."""
     config = training_config(model_path)
@@ -63,8 +63,10 @@ def check_against_training(model_path, lidar, action_repeat, obs_mode=None):
     obs_mode = resolve_obs_mode(lidar, obs_mode)
     old_mode = 'lidar' if config.get('lidar', False) else 'base'      # configs from before --obs-mode
     trained = {'obs_mode': config.get('obs_mode', old_mode), 'action_repeat': config.get('action_repeat', 1),
-               'features': config.get('features', feature_config(old_mode))}
-    now = {'obs_mode': obs_mode, 'action_repeat': action_repeat, 'features': feature_config(obs_mode)}
+               'features': config.get('features', feature_config(old_mode)),
+               'no_camera': config.get('no_camera', False)}
+    now = {'obs_mode': obs_mode, 'action_repeat': action_repeat,
+           'features': feature_config(obs_mode), 'no_camera': no_camera}
     if trained != now:
         differences = {key: (trained[key], now[key]) for key in trained if trained[key] != now[key]}
         if 'features' in differences:     # show only the feature settings that differ
@@ -72,15 +74,16 @@ def check_against_training(model_path, lidar, action_repeat, obs_mode=None):
             differences.update({f'features.{k}': (old.get(k), new.get(k)) for k in old.keys() | new.keys()
                                 if old.get(k) != new.get(k)})
         raise ValueError(f'{model_path} was trained differently, (training, now): {differences}. '
-                         'Pass the same --obs-mode (or --lidar) / --action-repeat as in training, '
+                         'Pass the same --obs-mode (or --lidar), --action-repeat, and --no-camera as in training, '
                          'and use the centre line file it was trained with.')
 
 """rebuild the training wrappers around env and load the trained model into them."""
 
-def load_dqn_driver(env, model_path, lidar, action_repeat=1, obs_mode=None):
+def load_dqn_driver(env, model_path, lidar, action_repeat=1, obs_mode=None, no_camera=False):
     obs_mode = resolve_obs_mode(lidar, obs_mode)
     #buffer_size=1: the throwaway model built here is replaced by load(); no need for a big buffer
-    driver = SB3Driver(env, model_class=DQN, wrappers=dqn_wrappers(action_repeat=action_repeat, obs_mode=obs_mode),
+    driver = SB3Driver(env, model_class=DQN, wrappers=dqn_wrappers(action_repeat=action_repeat, obs_mode=obs_mode,
+                                                           no_camera=no_camera),
                        buffer_size=1)
     driver.load(model_path)
     #compare key by key: gymnasium's Dict equality also depends on key order, which differs harmlessly
@@ -90,7 +93,7 @@ def load_dqn_driver(env, model_path, lidar, action_repeat=1, obs_mode=None):
             f'{model_path} was trained on a different observation than '
             f'--obs-mode {obs_mode} gives.\n'
             f'model: {driver.model.observation_space}\nnow:   {driver.env.observation_space}\n'
-            'Use the --obs-mode the model was trained with.'
+            'Use the --obs-mode and --no-camera settings the model was trained with.'
         )
 
     
@@ -145,11 +148,12 @@ class EpisodeRecorder(gym.Wrapper):
 
 def run_episode_in_new_process(job):
     """Fresh process per episode, because racecar_gym's reset does not fully clear the last one."""
-    model_path, obs_mode, action_repeat, seed, render = job
+    model_path, obs_mode, action_repeat, seed, render, no_camera = job
 
     env = EpisodeRecorder(gym_api.SingleAgentRaceEnv(scenario=dqn_scenario(obs_mode == 'lidar'),
                                                      render_mode='human' if render else 'rgb_array_birds_eye'))
-    driver = SB3EvalDriver(load_dqn_driver(env, model_path, False, action_repeat, obs_mode), action_repeat)
+    driver = SB3EvalDriver(load_dqn_driver(env, model_path, False, action_repeat, obs_mode,
+                                         no_camera=no_camera), action_repeat)
     result = run_episode(env, driver, seed)
     result.update(env.summary())
     env.close()
@@ -163,6 +167,8 @@ def main():
     parser.add_argument('--lidar', action='store_true', help='model was trained with LiDAR (= --obs-mode lidar)')
     parser.add_argument('--obs-mode', choices=['base', 'lidar', 'track', 'track-lookahead'], default=None,
                         help='same as in training (checked against the training config.json)')
+    parser.add_argument('--no-camera', action='store_true',
+                        help='model was trained without RGB camera observations')
     parser.add_argument('--action-repeat', type=int, default=1,
                         help='same value as in training (checked against the training config.json)')
     
@@ -174,9 +180,9 @@ def main():
     args = parser.parse_args()
 
     obs_mode = resolve_obs_mode(args.lidar, args.obs_mode)
-    check_against_training(args.model, False, args.action_repeat, obs_mode)
+    check_against_training(args.model, False, args.action_repeat, obs_mode, no_camera=args.no_camera)
 
-    jobs = [(args.model, obs_mode, args.action_repeat, args.seed + i, args.render)
+    jobs = [(args.model, obs_mode, args.action_repeat, args.seed + i, args.render, args.no_camera)
             for i in range(args.episodes)]
     workers = 1 if args.render else args.workers
     episodes = []
@@ -195,16 +201,19 @@ def main():
                    lap_rate=round(sum(e['lap_completed'] for e in episodes) / len(episodes), 2),
                    ends={end: sum(e['end'] == end for e in episodes) for end in sorted({e['end'] for e in episodes})},
                    stuck=sum(e['stuck_last_10s'] for e in episodes), action_repeat=args.action_repeat,
-                   obs_mode=obs_mode)
+                   obs_mode=obs_mode, no_camera=args.no_camera)
     print(json.dumps(summary, indent=2))
 
     os.makedirs(args.out, exist_ok=True)
 
     name = {'base': 'dqn', 'lidar': 'dqn_lidar'}.get(obs_mode, f"dqn_{obs_mode.replace('-', '_')}") + (f'_ar{args.action_repeat}' if args.action_repeat > 1 else '')
+    if args.no_camera:
+        name += "_nocamera"
     path = os.path.join(args.out, f"{name}_{datetime.now():%Y%m%d_%H%M%S}.json")
 
     with open(path, 'w') as f:
         json.dump(dict(model=args.model, obs_mode=obs_mode, lidar=obs_mode == 'lidar', action_repeat=args.action_repeat,
+                       no_camera=args.no_camera,
                        scenario=os.path.join('scenarios', os.path.basename(dqn_scenario(obs_mode == 'lidar'))),
                        summary=summary, episodes=episodes), f, indent=2)
         

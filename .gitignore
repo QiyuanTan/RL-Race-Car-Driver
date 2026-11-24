@@ -1,12 +1,35 @@
-racecar_gym
-.idea
-__pycache__/
-*.pyc
+# Local environment and editor settings
+racecar_gym/
+.idea/
 .venv*/
-logs/
+venv/
+env/
 
-# DQN checkpoints (replay buffers are ~1 GB each)
+# Python-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Logs and temporary files
+logs/
+*.log
+*.tmp
+.DS_Store
+
+# Large training checkpoints and replay buffers
 models/checkpoints/
 
+# DQN experimental outputs (keep locally; do not commit)
+results/hairpin_*/
+results/vehicle_turning_radius*/
+results/dqn_*/
+results/stage1*/
+results/sector_*/
+results/steering_*/
+results/centerline_*/
+
+# Checkpoint evaluation: retain only the final comparison CSV
+results/final_checkpoint_grid_eval/*
+!results/final_checkpoint_grid_eval/checkpoint_comparison.csv
 # trained DQN / BC models
 models/jx_*.zip

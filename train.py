@@ -7,12 +7,13 @@ from pathlib import Path
 
 from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper, dqn_wrappers, resolve_obs_mode
 from Agents.track_features import feature_config
+from Agents.demos import DemoKeepingDictReplayBuffer, collect_ftg_demos
 from Agents.dqfd import MarginDQN
-from Agents.demos import DemoKeepingDictReplayBuffer, DemoMixDictReplayBuffer, collect_ftg_demos, collect_takeover_demos
+from Agents.demos import DemoMixDictReplayBuffer, collect_takeover_demos
 from Agents.ftg_track_demos import collect_ftg_track_demos
 from Agents.wrappers2 import FTGTeacherLidarWrapper
 from Agents.wrappers import (FlattenActionWrapper, DiscreteActionWrapper, CrashPenaltyWrapper, HairpinStartWrapper,
-                             SimStepCounter, StartModeWrapper)
+                             SimStepCounter, StartModeWrapper, ForwardProgressRewardWrapper)
 from stable_baselines3 import PPO, DQN, SAC
 from stable_baselines3.common.callbacks import BaseCallback
 from racecar_gym.envs import gym_api
@@ -125,7 +126,7 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
               action_repeat=1, target_update_interval=10_000, train_start='grid', demo_episodes=0,
               demo_laps=0, obs_mode=None, reward_mode='original', hairpin_share=0.5, init_from=None,
               crash_penalty=0.0, takeover_demos=0, takeover_points=(0.24, 0.26, 0.28), demo_fraction=0.2,
-              margin_loss=0.0, demo_pretrain_steps=0):
+              margin_loss=0.0, demo_pretrain_steps=0, no_camera=False, collision_penalty=1.0):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -185,6 +186,11 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
     folder = checkpoint_dir(save_path)
     features = feature_config(obs_mode)
     env = counter = SimStepCounter(env)     # innermost: counts every real simulator step
+    if reward_mode not in ('original', 'forward-collision', 'signed-progress'):
+        raise ValueError(f'unknown reward_mode: {reward_mode}')
+    if reward_mode == 'forward-collision':
+        env = ForwardProgressRewardWrapper(env, progress_scale=100.0,
+                                           collision_penalty=collision_penalty)
     penalty = None
     if crash_penalty:
         env = penalty = CrashPenaltyWrapper(env, penalty=crash_penalty)   # one penalty per crash
@@ -218,7 +224,8 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
         extra = {}
     driver = SB3Driver(
         env, model_class=model_class,
-        wrappers=dqn_wrappers(action_repeat=action_repeat, obs_mode=obs_mode, reward_mode=reward_mode), verbose=1,
+        wrappers=dqn_wrappers(action_repeat=action_repeat, obs_mode=obs_mode,
+                              reward_mode=reward_mode, no_camera=no_camera), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
         target_update_interval=target_update_interval, **extra, **extra_init,
     )
@@ -234,10 +241,12 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             config = json.loads((folder / 'config.json').read_text())
             defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid', 'demo_episodes': 0,
                         'demo_laps': 0, 'reward_mode': 'original', 'hairpin_share': None, 'init_from': None,
-                        'crash_penalty': 0.0, 'takeover_demos': 0, 'demo_fraction': None, 'margin_loss': 0.0,
-                        'demo_pretrain_steps': 0}
+                        'no_camera': False, 'collision_penalty': 1.0,
+                        'crash_penalty': 0.0, 'takeover_demos': 0, 'demo_fraction': None,
+                        'margin_loss': 0.0, 'demo_pretrain_steps': 0}
             settings = (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start),
                         ('demo_episodes', demo_episodes), ('demo_laps', demo_laps), ('reward_mode', reward_mode),
+                        ('no_camera', no_camera), ('collision_penalty', collision_penalty),
                         ('hairpin_share', hairpin_share if train_start == 'hairpin' else None),
                         ('init_from', str(init_from) if init_from else None),
                         ('crash_penalty', float(crash_penalty)), ('takeover_demos', takeover_demos),
@@ -300,6 +309,8 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             folder.mkdir(parents=True, exist_ok=True)
             (folder / 'config.json').write_text(json.dumps({
                 'algorithm': 'DQN', 'obs_mode': obs_mode, 'lidar': lidar,
+                'no_camera': no_camera, 'reward_mode': reward_mode,
+                'collision_penalty': collision_penalty,
                 'scenario': os.path.basename(dqn_scenario(lidar or use_track_demos)), 'features': features,
                 'observation_space': {k: list(s.shape) for k, s in driver.env.observation_space.spaces.items()},
                 'dqn': dqn_settings(driver.model), 'code': git_commit(),
@@ -387,6 +398,13 @@ if __name__ == '__main__':
     parser.add_argument('--obs-mode', choices=['base', 'lidar', 'track', 'track-lookahead'], default=None,
                         help="extra observations: track = track-relative features, track-lookahead = "
                              "+ centre line points ahead (both use the map's centre line). Default: base")
+    parser.add_argument('--no-camera', action='store_true', help='Remove RGB camera from DQN observations')
+    parser.add_argument('--reward-mode',
+                        choices=['original', 'forward-collision', 'signed-progress'],
+                        default='original',
+                        help='training reward (original preserves baseline behavior)')
+    parser.add_argument('--collision-penalty', type=float, default=1.0,
+                        help='positive penalty magnitude for forward-collision reward')
     parser.add_argument('--timesteps', type=int, default=1_000_000)
     parser.add_argument('--save-path', default=None,
                         help='default: models/dqn_model, or models/dqn_lidar_model with --lidar')
@@ -427,12 +445,6 @@ if __name__ == '__main__':
                         help='save model + replay buffer every N steps, latest copy only (0 = off)')
     parser.add_argument('--resume', action='store_true',
                         help='continue from the latest resumable checkpoint of this --save-path')
-    parser.add_argument(
-    '--reward-mode',
-    choices=['original', 'signed-progress'],
-    default='original',
-    help='reward function used during DQN training'
-    )
     args = parser.parse_args()
 
     obs_mode = resolve_obs_mode(args.lidar, args.obs_mode)
@@ -451,11 +463,13 @@ if __name__ == '__main__':
                       (obs_mode == 'track-lookahead' and bool(args.demo_episodes or args.demo_laps)))
     env = gym_api.SingleAgentRaceEnv(scenario=dqn_scenario(training_lidar), render_mode='rgb_array_birds_eye')
     train_dqn(env, total_timesteps=args.timesteps, save_path=save_path, obs_mode=obs_mode,
+              no_camera=args.no_camera, reward_mode=args.reward_mode,
+              collision_penalty=args.collision_penalty,
               buffer_size=args.buffer_size, seed=args.seed,
               eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume,
               action_repeat=args.action_repeat, target_update_interval=args.target_update_interval,
               train_start=args.train_start, demo_episodes=args.demo_episodes, demo_laps=args.demo_laps,
-              reward_mode=args.reward_mode, hairpin_share=args.hairpin_share, init_from=args.init_from,
+              hairpin_share=args.hairpin_share, init_from=args.init_from,
               crash_penalty=args.crash_penalty, takeover_demos=args.takeover_demos,
               takeover_points=args.takeover_points, demo_fraction=args.demo_fraction,
               margin_loss=args.margin_loss, demo_pretrain_steps=args.demo_pretrain_steps)

@@ -1,3 +1,5 @@
+import gymnasium as gym
+import numpy as np
 from functools import partial
 
 import gymnasium as gym
@@ -15,7 +17,7 @@ from torch import nn
 
 from Agents.Driver import Driver
 from Agents.wrappers import (DiscreteActionWrapper, LidarObservationWrapper,
-                             ActionRepeatWrapper)
+                             ActionRepeatWrapper, RemoveCameraWrapper)
 from Agents.wrappers import FlattenActionWrapper, TrackObservationWrapper
 from Agents.wrappers import (
     DiscreteActionWrapper,
@@ -186,12 +188,11 @@ def resolve_obs_mode(lidar=False, obs_mode=None):
     return obs_mode
 
 
-
 def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None,
-                 reward_mode='original'):
+                 reward_mode='original', no_camera=False):
     obs_mode = resolve_obs_mode(lidar, obs_mode)
 
-    if reward_mode not in ('original', 'signed-progress'):
+    if reward_mode not in ('original', 'forward-collision', 'signed-progress'):
         raise ValueError(f'Unknown reward mode: {reward_mode}')
 
     wrappers = []
@@ -216,7 +217,8 @@ def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None,
                 lookahead=obs_mode == 'track-lookahead'
             )
         )
-
+    if no_camera:
+        wrappers.append(RemoveCameraWrapper)
     wrappers.append(SB3ObservationWrapper)
     return wrappers
 
