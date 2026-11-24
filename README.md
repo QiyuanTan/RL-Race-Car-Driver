@@ -16,8 +16,8 @@ We submit the `final` branch. The table shows where each part of the project was
 | `dqn-track` | Track-relative observations (`--obs-mode track`, `track-lookahead`) | `dqn-lidar` |
 | `dqn-lidar-hairpin` | Hairpin fine-tuning options and analysis tools | `dqn-lidar` |
 | `jx_dqn_improvement` | _TODO (Jayden)_ | `dqn-track` |
-| `comparison-matrix` | _TODO (Jack)_ | `dqn-lidar` |
-| `comparison-interface-track` | _TODO (Jack)_ | `jx_dqn_improvement` |
+| `comparison-matrix` | Performance comparison matrix, unified evaluation metrics, lap completion rate, lap time, collision rate, and control smoothness comparison | `dqn-lidar` |
+| `comparison-interface-track` | Comparison interface for track-relative DQN agents, integration with the evaluation framework, and standardized performance comparison across agents | `jx_dqn_improvement` |
 | `final` | `comparison-interface-track` with `dqn-lidar-hairpin` merged in | both |
 
 The final branch merges the hairpin work into `comparison-interface-track`, which already has the newer comparison document.
