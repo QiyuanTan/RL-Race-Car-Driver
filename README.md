@@ -195,22 +195,24 @@ tensorboard --logdir logs
 For inference, `run_sim.py` provides a simple interface to load a trained model and run it in the simulator.
 
 
-## DQN Final Experiment (Fall 2026)
+## Track-Lookahead DQN: Yutao Lin's Fine-Tuning Experiment (Fall 2026)
 
-This repository includes a DQN racing baseline and a final reward-shaped training run
-on the Austria track. The final experiments retain the same 15-action discrete
-motor/steering space, `track-lookahead` observations, and `action_repeat=4`
-(four simulator steps per DQN decision). The final training run uses the earlier
-Stage 1 model as its initialization.
+This section documents **Yutao Lin's individual track-lookahead DQN experiment**,
+not a final training run or model for the entire team. It builds on the
+track-relative feature representation developed by another team member.
+Both the Stage 1 model and this subsequent fine-tuning experiment use the same
+15-action discrete motor/steering space, `track-lookahead` observations, and
+`action_repeat=4` (four simulator steps per DQN decision). The fine-tuning
+experiment initializes from Yutao's earlier Stage 1 checkpoint.
 
-### Models to retain
+### Models from this experiment
 
 | Model | Purpose | Grid evaluation (10 episodes, seeds 100–109) |
 | --- | --- | --- |
 | `models/dqn_centerline_stage1_300k.zip` | Original Stage 1 baseline, trained for 300k steps | Historical mean progress ~35.1%, best progress ~35.4% |
-| `models/dqn_final_best_75k.zip` | Best candidate among the 20 checkpoints from the final training run | Mean maximum progress **35.45%**, maximum **35.5%**, minimum **35.3%** |
+| `models/dqn_final_best_75k.zip` | Selected candidate among 20 checkpoints from this fine-tuning experiment | Mean maximum progress **35.45%**, maximum **35.5%**, minimum **35.3%** |
 
-The final run fine-tuned Stage 1 for **500,000 additional decisions** with
+This experiment fine-tuned Stage 1 for **500,000 additional decisions** with
 reward shaping and mixed starting positions. The 75k checkpoint (75k new steps,
 not 75k total training steps) had the highest mean Grid progress among the
 20 evaluated checkpoints. Its performance improvement over the historical Stage 1
@@ -219,9 +221,9 @@ same checkpoint batch because of a saved training-configuration metadata mismatc
 Therefore, these figures are descriptive rather than a verified head-to-head
 improvement. Neither model has demonstrated a completed lap.
 
-### Final DQN training changes
+### Fine-tuning changes
 
-The final training script is `train_dqn_final_stall_v2_fixed.py`. It builds on
+The standalone fine-tuning script is `train_dqn_final_stall_v2_fixed.py`. It builds on
 Stage 1 with:
 
 - **Progress-oriented reward shaping:** forward progress remains the main
@@ -240,10 +242,10 @@ Stage 1 with:
 The fine-tuning settings were: learning rate `3e-5`, replay buffer `20,000`,
 batch size `64`, target update interval `5,000`, discount factor `0.99`, and
 exploration rate linearly decreased from `0.15` to `0.03` over the first 35%
-of the 500k-step run. A smoke test was run before full training.
+of the 500k-step experiment. A smoke test was run before training.
 
 To reproduce the **training configuration** from a retained Stage 1 model,
-run from the repository root (the final script saves to a new prefix and should
+run from the repository root (the script saves to a new prefix and should
 not overwrite existing models):
 
 ```powershell
@@ -284,13 +286,13 @@ python train_dqn_final_stall_v2_fixed.py `
   --resume-every 10000
 ```
 
-> **Note:** The final script creates checkpoints during training, but a
+> **Note:** This standalone script creates checkpoints during training, but a
 > `--resume` command for this standalone training script has not been verified.
 > The `train.py --resume` workflow described above is separate.
 
-### Final evaluation and limitations
+### Checkpoint evaluation and limitations
 
-We evaluated **20 final-run checkpoints** at 25k intervals, each with 10 Grid
+For this experiment, we evaluated **20 fine-tuning checkpoints** at 25k intervals, each with 10 Grid
 starts (seeds 100–109), for **200 Grid evaluation episodes**. The best checkpoint
 was the 75k fine-tuning snapshot:
 
@@ -303,7 +305,7 @@ was the 75k fine-tuning snapshot:
 | 500k | 35.24% | 35.4% |
 
 No evaluated checkpoint completed a lap. The dominant failure remains a sharp
-hairpin around 36% environment progress, and final training did not establish a
+hairpin around 36% environment progress, and this fine-tuning did not establish a
 reliable solution to this turn. Local geometry analysis estimated a minimum
 centre-line radius of about 1.23 m; separate short-turn tests measured transient
 turn radii as low as ~0.98 m. These tests do **not** prove that a complete,
@@ -330,7 +332,7 @@ The Stage 1 model previously produced a mismatch involving `features.obs_mode`
 silently bypass feature checks. Before evaluating or comparing a model, confirm
 that observation dimensions **and semantics**, action mapping, action repeat,
 centerline data, and preprocessing match those used in training. The original
-Stage 1 evaluation numbers above come from earlier tests, not from the final
+Stage 1 evaluation numbers above come from earlier tests, not from this
 20-checkpoint batch.
 ## Shared evaluation interface
 
