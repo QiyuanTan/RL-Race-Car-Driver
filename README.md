@@ -405,8 +405,8 @@ The initial FTG/DQN comparisons used grid-start evaluation seeds 100–109, with
 | DQN + track | 4 steps | 140k | 34.4% | 0/10 | 0/10 |
 | LiDAR, hairpin fine-tuning (grid starts / hairpin starts / crash penalty) | 4 steps | validation | 35.4% | 0/10 | 0/10 |
 | LiDAR, takeover demos + margin loss | 4 steps | validation | 17.7% | 0/10 | 0/10 |
-| Track-lookahead DQN — Stage 1 (Yutao) | 4 steps | 300k | ~35.1% (historical; range not available) | 0/10 | 0/10 |
-| Track-lookahead DQN — mixed-start fine-tuning (Yutao) | 4 steps | 75k additional (selected from 500k run) | **35.45%** (35.3–35.5) | 0/10 | 0/10 |
+| Track-lookahead DQN — Stage 1 | 4 steps | 300k | ~35.1% (historical; range not available) | 0/10 | 0/10 |
+| Track-lookahead DQN — mixed-start fine-tuning | 4 steps | 75k additional (selected from 500k run) | **35.45%** (35.3–35.5) | 0/10 | 0/10 |
 
 In these runs, no DQN variant completed a lap; the first hairpin remained a major failure point. FTG could navigate it, motivating additional DQN analysis. Yutao's track-lookahead fine-tuning selected the 75k checkpoint from 20 candidates, but did not establish a reliable improvement over the historical Stage 1 baseline; see the individual experiment section above for details.
 
