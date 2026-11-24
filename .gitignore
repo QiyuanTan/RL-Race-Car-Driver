@@ -31,3 +31,5 @@ results/centerline_*/
 # Checkpoint evaluation: retain only the final comparison CSV
 results/final_checkpoint_grid_eval/*
 !results/final_checkpoint_grid_eval/checkpoint_comparison.csv
+# trained DQN / BC models
+models/jx_*.zip

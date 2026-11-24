@@ -281,3 +281,158 @@ def test_demo_laps_keeps_only_full_laps(monkeypatch):
     
     with pytest.raises(RuntimeError, match='only 1 of 2'):
         demos.collect_ftg_demos(FakeModel(), None, laps=2, max_attempts=2)    
+
+
+class ProgressEnv(FakeRaceEnv):
+    """Each 'random' reset lands at the next progress value from the list; 'grid' is progress 0.02."""
+
+    def __init__(self, progresses):
+        super().__init__(with_lidar=False)
+        self.progresses, self.modes = list(progresses), []
+
+    def reset(self, seed=None, options=None):
+        mode = (options or {}).get('mode')
+        self.modes.append(mode)
+        progress = self.progresses.pop(0) if mode == 'random' else 0.02
+        return self.make_obs(), {'progress': progress}
+
+
+def test_hairpin_start_retries_until_inside_the_window():
+    from Agents.wrappers import HairpinStartWrapper
+    env = HairpinStartWrapper(ProgressEnv([0.6, 0.1, 0.31, 0.25]), share=1.0)
+    _, info = env.reset(seed=0)
+    assert info['progress'] == 0.25 and env.env.modes == ['random'] * 4 and env.hairpin_starts == 1
+
+
+def test_hairpin_start_share_and_seed():
+    from Agents.wrappers import HairpinStartWrapper
+    always_grid = HairpinStartWrapper(ProgressEnv([]), share=0.0)
+    assert all(always_grid.reset(seed=s)[1]['progress'] == 0.02 for s in range(5))
+    picks = []
+    for _ in range(2):            
+        env = HairpinStartWrapper(ProgressEnv([0.25] * 100), share=0.5)
+        env.reset(seed=3)
+        picks.append([env.reset()[1]['progress'] for _ in range(40)])
+    assert picks[0] == picks[1] and 0.02 in picks[0] and 0.25 in picks[0]
+
+
+def test_hairpin_start_gives_up_with_a_clear_error():
+    from Agents.wrappers import HairpinStartWrapper
+    with pytest.raises(RuntimeError):
+        HairpinStartWrapper(ProgressEnv([0.9] * 10), share=1.0, max_tries=10).reset(seed=0)
+
+
+def test_init_from_must_match_lidar_and_action_repeat(tmp_path):
+    import json
+    from train import check_init_model
+    folder = tmp_path / 'checkpoints' / 'run'
+    (folder / 'eval').mkdir(parents=True)
+    (folder / 'config.json').write_text(json.dumps({'lidar': True, 'action_repeat': 4}))
+    model = folder / 'eval' / 'run_140000_steps.zip'
+    model.write_bytes(b'')
+    check_init_model(model, 'lidar', 4)
+    with pytest.raises(ValueError):
+        check_init_model(model, 'lidar', 2)
+    with pytest.raises(FileNotFoundError):
+        check_init_model(tmp_path / 'missing.zip', 'lidar', 4)
+
+
+class EndingEnv(FakeRaceEnv):
+    """Gives reward 1 per step; the 3rd step ends the episode, with or without a wall contact."""
+
+    def __init__(self, wall):
+        super().__init__(with_lidar=False)
+        self.wall, self.t = wall, 0
+
+    def reset(self, seed=None, options=None):
+        self.t = 0
+        return self.make_obs(), {}
+
+    def step(self, action):
+        self.t += 1
+        done = self.t == 3
+        return self.make_obs(), 1.0, done, False, {'wall_collision': done and self.wall}
+
+
+def test_crash_penalty_only_on_a_wall_ending():
+    from Agents.wrappers import ActionRepeatWrapper, CrashPenaltyWrapper
+    for wall, last_reward in ((True, 1.0 - 10.0), (False, 1.0)):
+        env = CrashPenaltyWrapper(EndingEnv(wall), penalty=10.0)
+        env.reset()
+        rewards = [env.step(0)[1] for _ in range(3)]
+        assert rewards == [1.0, 1.0, last_reward] and env.crashes == int(wall)
+    # under action repeat 4 the penalty is still counted once: 3 steps x 1 - 10
+    env = ActionRepeatWrapper(CrashPenaltyWrapper(EndingEnv(True), penalty=10.0), repeat=4)
+    env.reset()
+    assert env.step(0)[1] == pytest.approx(3.0 - 10.0)
+
+
+def test_hairpin_start_respects_an_explicit_mode():
+    from Agents.wrappers import HairpinStartWrapper
+    env = HairpinStartWrapper(ProgressEnv([0.25] * 5), share=1.0)
+    _, info = env.reset(seed=0, options={'mode': 'grid'})      
+    assert info['progress'] == 0.02 and env.env.modes == ['grid'] and env.hairpin_starts == 0
+
+
+def test_demo_mix_buffer_takes_a_fixed_share_from_the_demos():
+    import torch as th
+    from Agents.demos import DemoMixDictReplayBuffer
+    from stable_baselines3.common.buffers import DictReplayBuffer
+    obs_space = gym.spaces.Dict({'x': gym.spaces.Box(-10, 10, (1,), np.float32)})
+    act_space = gym.spaces.Discrete(3)
+    own = DemoMixDictReplayBuffer(100, obs_space, act_space, device='cpu')
+    own.demo = DictReplayBuffer(20, obs_space, act_space, device='cpu')
+    for buffer, value in ((own, 0.0), (own.demo, 1.0)):   
+        for _ in range(20):
+            o = {'x': np.full((1, 1), value, np.float32)}
+            buffer.add(o, o, np.array([0]), np.array([0.0]), np.array([False]), [{}])
+    own.demo_fraction = 0.25
+    batch = own.sample(32)
+    assert batch.observations['x'].shape[0] == 32
+    assert int(th.sum(batch.observations['x'] == 1.0)) == 8      
+    own.demo_fraction = 0.0
+    assert int(th.sum(own.sample(32).observations['x'] == 1.0)) == 0
+
+
+def margin_dqn_with_demos(action=3):
+    """A small MarginDQN on the fake env, with 64 demo transitions that all use `action`."""
+    from stable_baselines3.common.buffers import DictReplayBuffer
+    from Agents.demos import DemoMixDictReplayBuffer
+    from Agents.dqfd import MarginDQN
+    driver = SB3Driver(FakeRaceEnv(with_lidar=False), model_class=MarginDQN, wrappers=dqn_wrappers(False),
+                       buffer_size=200, seed=0, replay_buffer_class=DemoMixDictReplayBuffer)
+    model = driver.model
+    buffer = model.replay_buffer
+    buffer.demo = DictReplayBuffer(64, buffer.observation_space, buffer.action_space, device=buffer.device)
+    rng = np.random.default_rng(0)
+    for _ in range(64):
+        obs = {'pose': rng.normal(size=(1, 6)), 'velocity': rng.normal(size=(1, 6)), 'time': np.zeros((1, 1), np.float32)}
+        buffer.demo.add(obs, obs, np.array([action]), np.array([0.1]), np.array([False]), [{}])
+    return model
+
+
+def test_margin_loss_is_zero_only_when_the_demo_action_wins_by_the_margin():
+    import torch as th
+    from stable_baselines3.common.type_aliases import DictReplayBufferSamples
+    model = margin_dqn_with_demos()
+    data = model.replay_buffer.demo.sample(8)
+    with th.no_grad():                        
+        last = model.q_net.q_net[-1]
+        last.weight.zero_()
+        last.bias.zero_()
+        last.bias[3] = 1.0
+    zero_target = DictReplayBufferSamples(data.observations, data.actions, data.next_observations,
+                                          th.ones_like(data.dones), data.rewards)
+    _, _, margin_loss = model._losses(zero_target, n_demo=8)
+    assert float(margin_loss) == pytest.approx(0.0)
+    with th.no_grad():
+        last.bias[3] = 0.5                     # wins by only 0.5 < margin 0.8 -> loss 0.3
+    _, _, margin_loss = model._losses(zero_target, n_demo=8)
+    assert float(margin_loss) == pytest.approx(0.3, abs=1e-5)
+
+
+def test_pretraining_on_demos_makes_the_greedy_action_the_demo_action():
+    model = margin_dqn_with_demos(action=3)
+    first, last = model.pretrain_on_demos(300, batch_size=32)
+    assert last < first
+    assert model.demo_agreement() >= 0.95

@@ -1,18 +1,33 @@
-from Agents.Driver import Driver
-from Agents.wrappers import (
-    FlattenActionWrapper,
-    DiscreteActionWrapper,
-    LidarObservationWrapper,
-    ActionRepeatWrapper,
-    RemoveCameraWrapper
-)
-from Agents.track_features import OBS_MODES, TrackFeatureWrapper
 import gymnasium as gym
-from gymnasium import ObservationWrapper, spaces
 import numpy as np
 from functools import partial
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecEnv
+
+import gymnasium as gym
+import numpy as np
+from Agents.track_features import OBS_MODES, TrackFeatureWrapper
+from Agents.wrappers2 import SignedProgressRewardWrapper
+from gymnasium import ObservationWrapper, spaces
+from gymnasium.wrappers import FilterObservation
+from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.torch_layers import CombinedExtractor
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import VecEnv
+from torch import nn
+
+from Agents.Driver import Driver
+from Agents.wrappers import (DiscreteActionWrapper, LidarObservationWrapper,
+                             ActionRepeatWrapper, RemoveCameraWrapper)
+from Agents.wrappers import FlattenActionWrapper, TrackObservationWrapper
+from Agents.wrappers import (
+    DiscreteActionWrapper,
+    DrivableTrackObservationWrapper,
+    FlattenActionWrapper,
+    LocalDrivableTrackObservationWrapper,
+    LocalTrackObservationWrapper,
+    TrackObservationWrapper,
+)
+
 
 class SB3Driver(Driver):
     def __init__(self, env, model_class, wrappers=None, policy="MultiInputPolicy", **kwargs):
@@ -80,8 +95,11 @@ class SB3Driver(Driver):
         env = factory()
         env = self.apply_wrappers(env)
         return env
-"""Convert scalar Box entries in Dict observations to one-element vectors."""
+
+
 class SB3ObservationWrapper(ObservationWrapper):
+    """Convert scalar Box entries in Dict observations to one-element vectors."""
+
     def __init__(self, env):
         super().__init__(env)
         self._scalar_spaces = {}
@@ -110,7 +128,55 @@ class SB3ObservationWrapper(ObservationWrapper):
             observation[key] = np.asarray(obs[key], dtype=space.dtype).reshape(1)
         return observation
 
-    
+
+class TrackFeaturesExtractor(CombinedExtractor):
+    """Encode the normalized track channels with a CNN alongside the sensors."""
+
+    def __init__(self, observation_space, **kwargs):
+        track_key = TrackObservationWrapper.KEY
+        sensor_space = spaces.Dict([
+            (key, space) for key, space in observation_space.spaces.items() if key != track_key
+        ])
+        super().__init__(sensor_space, **kwargs)
+        track_features = 128
+        self.extractors[track_key] = nn.Sequential(
+            nn.Conv2d(observation_space[track_key].shape[0], 16, kernel_size=5, stride=4, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((4, 4)),
+            nn.Flatten(),
+            nn.Linear(32 * 4 * 4, track_features),
+            nn.ReLU(),
+        )
+        self._features_dim += track_features
+
+
+class DrivableTrackFeaturesExtractor(TrackFeaturesExtractor):
+    TRACK_KEY = DrivableTrackObservationWrapper.KEY
+
+
+class _TrackViewDriver(SB3Driver):
+    _features_extractor_class = TrackFeaturesExtractor
+
+    def __init__(self, env, model_class, action_wrapper, track_wrapper, *, policy_kwargs=None, **kwargs):
+        wrappers = [
+            action_wrapper,
+            SB3ObservationWrapper,
+            track_wrapper,
+            self._exclude_rgb_camera,
+            Monitor,  # SB3 skips automatic monitoring for already-vectorized environments.
+        ]
+        policy_kwargs = dict(policy_kwargs or {})
+        policy_kwargs.setdefault("features_extractor_class", self._features_extractor_class)
+        super().__init__(env, model_class, wrappers=wrappers, policy_kwargs=policy_kwargs, **kwargs)
+
+    @staticmethod
+    def _exclude_rgb_camera(env):
+        keys = [key for key in env.observation_space.spaces if key != "rgb_camera"]
+        return FilterObservation(env, filter_keys=keys)
+
+
 def resolve_obs_mode(lidar=False, obs_mode=None):
     """--lidar is the old spelling of --obs-mode lidar; both together must agree."""
     if obs_mode is None:
@@ -122,28 +188,35 @@ def resolve_obs_mode(lidar=False, obs_mode=None):
     return obs_mode
 
 
-def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None, no_camera=False):
-    """
-    Wrappers used by both training and eval.
-
-    base: discrete actions and the SB3 observation fix
-    lidar: also cleans and scales the lidar readings, needs a lidar sensor
-    track: adds 5 track-relative values
-    track-lookahead: also adds 5 points ahead, 10 values total for lookahead
-
-    All modes keep the camera, pose, velocity, acceleration and time.
-    The old lidar flag still works.
-
-    Action repeat goes on the inside so it repeats the decoded
-    motor and steering for N simulator steps.
-    """
+def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None,
+                 reward_mode='original', no_camera=False):
     obs_mode = resolve_obs_mode(lidar, obs_mode)
-    wrappers = [partial(ActionRepeatWrapper, repeat=action_repeat)] if action_repeat > 1 else []
+
+    if reward_mode not in ('original', 'forward-collision', 'signed-progress'):
+        raise ValueError(f'Unknown reward mode: {reward_mode}')
+
+    wrappers = []
+
+    # Reward must be inside ActionRepeatWrapper.
+    if reward_mode == 'signed-progress':
+        wrappers.append(SignedProgressRewardWrapper)
+
+    if action_repeat > 1:
+        wrappers.append(
+            partial(ActionRepeatWrapper, repeat=action_repeat)
+        )
+
     wrappers.append(DiscreteActionWrapper)
+
     if obs_mode == 'lidar':
         wrappers.append(LidarObservationWrapper)
     elif obs_mode.startswith('track'):
-        wrappers.append(partial(TrackFeatureWrapper, lookahead=obs_mode == 'track-lookahead'))
+        wrappers.append(
+            partial(
+                TrackFeatureWrapper,
+                lookahead=obs_mode == 'track-lookahead'
+            )
+        )
     if no_camera:
         wrappers.append(RemoveCameraWrapper)
     wrappers.append(SB3ObservationWrapper)
@@ -177,3 +250,90 @@ class SB3EvalDriver(Driver):
             self._action = self.sb3_driver.act_raw(obs, deterministic=True)
         self._steps += 1
         return {key: value.copy() for key, value in self._action.items()}
+
+
+class TrackPPODriver(_TrackViewDriver):
+    """Train or run PPO with a full-track view and non-camera observations."""
+
+    def __init__(self, env, *, track=None, map_size=256, crop_to_track=True, n_steps=256, **kwargs):
+        track_wrapper = partial(TrackObservationWrapper, track=track, map_size=map_size, crop_to_track=crop_to_track)
+        super().__init__(env, PPO, FlattenActionWrapper, track_wrapper, n_steps=n_steps, **kwargs)
+
+
+class LocalTrackPPODriver(_TrackViewDriver):
+    """Train or run PPO with a car-relative track view and non-camera observations."""
+
+    def __init__(
+        self, env, *, track=None, map_size=128, view_size_m=12.8,
+        include_distance=False, n_steps=256, **kwargs,
+    ):
+        track_wrapper = partial(
+            LocalTrackObservationWrapper, track=track, map_size=map_size, view_size_m=view_size_m,
+            include_distance=include_distance,
+        )
+        super().__init__(env, PPO, FlattenActionWrapper, track_wrapper, n_steps=n_steps, **kwargs)
+
+
+class TrackDQNDriver(_TrackViewDriver):
+    """Train or run DQN with a full-track view and discrete controls."""
+
+    # Current and next 2 x 256 x 256 float32 views use 1 GiB at this capacity.
+    DEFAULT_BUFFER_SIZE = 1024
+
+    def __init__(self, env, *, track=None, map_size=256, crop_to_track=True, buffer_size=DEFAULT_BUFFER_SIZE, **kwargs):
+        track_wrapper = partial(TrackObservationWrapper, track=track, map_size=map_size, crop_to_track=crop_to_track)
+        super().__init__(env, DQN, DiscreteActionWrapper, track_wrapper, buffer_size=buffer_size, **kwargs)
+
+
+class LocalTrackDQNDriver(_TrackViewDriver):
+    """Train or run DQN with a car-relative track view and discrete controls."""
+
+    # Current and next 1 x 128 x 128 float32 views use 512 MiB at this capacity.
+    DEFAULT_BUFFER_SIZE = 4096
+
+    def __init__(
+        self, env, *, track=None, map_size=128, view_size_m=12.8,
+        include_distance=False, buffer_size=DEFAULT_BUFFER_SIZE, **kwargs,
+    ):
+        track_wrapper = partial(
+            LocalTrackObservationWrapper, track=track, map_size=map_size, view_size_m=view_size_m,
+            include_distance=include_distance,
+        )
+        super().__init__(env, DQN, DiscreteActionWrapper, track_wrapper, buffer_size=buffer_size, **kwargs)
+
+
+class _DrivableTrackDriver(_TrackViewDriver):
+    _features_extractor_class = DrivableTrackFeaturesExtractor
+
+    def __init__(self, env, model_class, track_wrapper, default_buffer_size, **kwargs):
+        if model_class is DQN:
+            action_wrapper = DiscreteActionWrapper
+            kwargs.setdefault("buffer_size", default_buffer_size)
+        elif model_class is PPO:
+            action_wrapper = FlattenActionWrapper
+            kwargs.setdefault("n_steps", 256)
+        else:
+            raise ValueError("Drivable track drivers support DQN and PPO")
+        super().__init__(env, model_class, action_wrapper, track_wrapper, **kwargs)
+
+
+class DrivableTrackDriver(_DrivableTrackDriver):
+    """Train or run DQN or PPO with a full-track drivable-area view."""
+
+    def __init__(self, env, *, model_class=DQN, track=None, map_size=256, crop_to_track=True, **kwargs):
+        wrapper = partial(DrivableTrackObservationWrapper, track=track, map_size=map_size, crop_to_track=crop_to_track)
+        super().__init__(env, model_class, wrapper, TrackDQNDriver.DEFAULT_BUFFER_SIZE, **kwargs)
+
+
+class LocalDrivableTrackDriver(_DrivableTrackDriver):
+    """Train or run DQN or PPO with a car-relative drivable-area view."""
+
+    def __init__(
+        self, env, *, model_class=DQN, track=None, map_size=128, view_size_m=12.8,
+        include_distance=False, **kwargs,
+    ):
+        wrapper = partial(
+            LocalDrivableTrackObservationWrapper, track=track, map_size=map_size, view_size_m=view_size_m,
+            include_distance=include_distance,
+        )
+        super().__init__(env, model_class, wrapper, LocalTrackDQNDriver.DEFAULT_BUFFER_SIZE, **kwargs)
