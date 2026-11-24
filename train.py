@@ -8,7 +8,7 @@ from pathlib import Path
 from Agents.SB3Drivers import SB3Driver, SB3ObservationWrapper, dqn_wrappers, resolve_obs_mode
 from Agents.track_features import feature_config
 from Agents.demos import DemoKeepingDictReplayBuffer, collect_ftg_demos
-from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper, SimStepCounter, StartModeWrapper
+from Agents.wrappers import FlattenActionWrapper, DiscreteActionWrapper, SimStepCounter, StartModeWrapper, ForwardProgressRewardWrapper
 from stable_baselines3 import PPO, DQN, SAC
 from stable_baselines3.common.callbacks import BaseCallback
 from racecar_gym.envs import gym_api
@@ -119,7 +119,8 @@ def checkpoint_dir(save_path):
 def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_000,
               lidar=False, seed=None, eval_every=0, resume_every=0, resume=False,
               action_repeat=1, target_update_interval=10_000, train_start='grid', demo_episodes=0,
-              demo_laps=0, obs_mode=None):
+              demo_laps=0, obs_mode=None, no_camera=False, reward_mode='original',
+              collision_penalty=1.0):
     """Train DQN with a bounded replay buffer, independent of training duration.
 
     At 128x128 RGB uint8, 10,000 transitions use about 0.92 GiB for current
@@ -156,13 +157,19 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
     folder = checkpoint_dir(save_path)
     features = feature_config(obs_mode)
     env = counter = SimStepCounter(env)     # innermost: counts every real simulator step
+    if reward_mode not in ('original', 'forward-collision'):
+        raise ValueError(f'unknown reward_mode: {reward_mode}')
+    if reward_mode == 'forward-collision':
+        env = ForwardProgressRewardWrapper(env, progress_scale=100.0,
+                                           collision_penalty=collision_penalty)
     if train_start != 'grid':
         env = StartModeWrapper(env, mode=train_start)   # training only, not part of dqn_wrappers
     if demo_episodes and demo_laps:
         raise ValueError('use either --demo-episodes or --demo-laps, not both')
     extra = {'replay_buffer_class': DemoKeepingDictReplayBuffer} if (demo_episodes or demo_laps) else {}
     driver = SB3Driver(
-        env, model_class=DQN, wrappers=dqn_wrappers(action_repeat=action_repeat, obs_mode=obs_mode), verbose=1,
+        env, model_class=DQN, wrappers=dqn_wrappers(action_repeat=action_repeat, obs_mode=obs_mode,
+                                            no_camera=no_camera), verbose=1,
         tensorboard_log=str(log_dir), buffer_size=buffer_size, seed=seed,
         target_update_interval=target_update_interval, **extra,
     )
@@ -175,9 +182,12 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
             state = json.loads(state_file.read_text())
             config = json.loads((folder / 'config.json').read_text())
             defaults = {'lidar': False, 'action_repeat': 1, 'train_start': 'grid', 'demo_episodes': 0,
-                        'demo_laps': 0}
+                        'demo_laps': 0, 'no_camera': False,
+                        'reward_mode': 'original', 'collision_penalty': 1.0}
             for key, value in (('lidar', lidar), ('action_repeat', action_repeat), ('train_start', train_start),
-                               ('demo_episodes', demo_episodes), ('demo_laps', demo_laps)):
+                               ('demo_episodes', demo_episodes), ('demo_laps', demo_laps),
+                               ('no_camera', no_camera), ('reward_mode', reward_mode),
+                               ('collision_penalty', collision_penalty)):
                 if config.get(key, defaults[key]) != value:
                     raise ValueError(f'this run was started with {key}={config.get(key)}; '
                                      f'resume it with the same setting')
@@ -215,7 +225,8 @@ def train_dqn(env, total_timesteps=10000, save_path='dqn_model', buffer_size=10_
                       f"discarded {demos['discarded']}", flush=True)
             folder.mkdir(parents=True, exist_ok=True)
             (folder / 'config.json').write_text(json.dumps({
-                'algorithm': 'DQN', 'obs_mode': obs_mode, 'lidar': lidar,
+                'algorithm': 'DQN', 'obs_mode': obs_mode, 'lidar': lidar, 'no_camera': no_camera,
+                'reward_mode': reward_mode, 'collision_penalty': collision_penalty,
                 'scenario': os.path.basename(dqn_scenario(lidar)), 'features': features,
                 'observation_space': {k: list(s.shape) for k, s in driver.env.observation_space.spaces.items()},
                 'dqn': dqn_settings(driver.model), 'code': git_commit(),
@@ -277,6 +288,11 @@ if __name__ == '__main__':
     parser.add_argument('--obs-mode', choices=['base', 'lidar', 'track', 'track-lookahead'], default=None,
                         help="extra observations: track = track-relative features, track-lookahead = "
                              "+ centre line points ahead (both use the map's centre line). Default: base")
+    parser.add_argument('--no-camera', action='store_true', help='Remove RGB camera from DQN observations')
+    parser.add_argument('--reward-mode', choices=['original', 'forward-collision'], default='original',
+                        help='training reward (original preserves baseline behavior)')
+    parser.add_argument('--collision-penalty', type=float, default=1.0,
+                        help='positive penalty magnitude for forward-collision reward')
     parser.add_argument('--timesteps', type=int, default=1_000_000)
     parser.add_argument('--save-path', default=None,
                         help='default: models/dqn_model, or models/dqn_lidar_model with --lidar')
@@ -315,7 +331,9 @@ if __name__ == '__main__':
     # train_ppo(env_factories, total_timesteps=1_000_000, save_path='models/ppo_model')
 
     env = gym_api.SingleAgentRaceEnv(scenario=dqn_scenario(obs_mode == 'lidar'), render_mode='rgb_array_birds_eye')
-    train_dqn(env, total_timesteps=args.timesteps, save_path=save_path, obs_mode=obs_mode,
+    train_dqn(env, total_timesteps=args.timesteps, save_path=save_path, obs_mode=obs_mode, 
+              no_camera=args.no_camera, reward_mode=args.reward_mode,
+              collision_penalty=args.collision_penalty,
               buffer_size=args.buffer_size, seed=args.seed,
               eval_every=args.eval_every, resume_every=args.resume_every, resume=args.resume,
               action_repeat=args.action_repeat, target_update_interval=args.target_update_interval,

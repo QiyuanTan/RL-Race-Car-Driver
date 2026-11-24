@@ -1,6 +1,11 @@
 from Agents.Driver import Driver
-from Agents.wrappers import (FlattenActionWrapper, DiscreteActionWrapper, LidarObservationWrapper,
-                            ActionRepeatWrapper)
+from Agents.wrappers import (
+    FlattenActionWrapper,
+    DiscreteActionWrapper,
+    LidarObservationWrapper,
+    ActionRepeatWrapper,
+    RemoveCameraWrapper
+)
 from Agents.track_features import OBS_MODES, TrackFeatureWrapper
 import gymnasium as gym
 from gymnasium import ObservationWrapper, spaces
@@ -117,7 +122,7 @@ def resolve_obs_mode(lidar=False, obs_mode=None):
     return obs_mode
 
 
-def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None):
+def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None, no_camera=False):
     """
     Wrappers used by both training and eval.
 
@@ -139,6 +144,8 @@ def dqn_wrappers(lidar=False, action_repeat=1, obs_mode=None):
         wrappers.append(LidarObservationWrapper)
     elif obs_mode.startswith('track'):
         wrappers.append(partial(TrackFeatureWrapper, lookahead=obs_mode == 'track-lookahead'))
+    if no_camera:
+        wrappers.append(RemoveCameraWrapper)
     wrappers.append(SB3ObservationWrapper)
     return wrappers
 
