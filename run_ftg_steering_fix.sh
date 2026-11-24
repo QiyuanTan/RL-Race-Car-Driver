@@ -21,6 +21,3 @@ python evaluate_ftg_bc.py \
   --model models/jx_dqn_ftg_steeringaware_2500_bc_only.zip \
   --features geometry --episodes 3 --seed 100 --action-repeat 4 \
   --max-sim-time 15 --out /tmp/jx_ftg_steeringaware_2500_eval
-
-python diagnose_ftg_bc_actions.py --models \
-  models/jx_dqn_ftg_steeringaware_2500_bc_only.zip
