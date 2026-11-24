@@ -11,11 +11,11 @@ We submit the `final` branch. The table shows where each part of the project was
 | `main`, `SAC` | _TODO (Qiyuan)_ | - |
 | `DQN` | _TODO (Qiyuan)_ | `main` |
 | `baseline-Elaine` | Follow-the-Gap driver, `evaluate_baseline.py`, unit tests | `SAC` |
-| `jx_smoothness_metrics` | _TODO (Jayden)_ | `baseline-Elaine` |
+| `jx_smoothness_metrics` | Added motor and steering smoothness metrics to measure changes in driving actions | `baseline-Elaine` |
 | `dqn-lidar` | DQN + LiDAR, action repeat, eval / resume checkpoints, `evaluate_sb3.py`, random starts, FTG demos | `jx_smoothness_metrics`, `DQN` |
 | `dqn-track` | Track-relative observations (`--obs-mode track`, `track-lookahead`) | `dqn-lidar` |
 | `dqn-lidar-hairpin` | Hairpin fine-tuning options and analysis tools | `dqn-lidar` |
-| `jx_dqn_improvement` | _TODO (Jayden)_ | `dqn-track` |
+| `jx_dqn_improvement` | Added signed progress reward, FTG demonstrations for track-lookahead DQN, Behavior Cloning with motor and steering losses, and BC-regularized DQN training | `dqn-track` |
 | `comparison-matrix` | Performance comparison matrix, unified evaluation metrics, lap completion rate, lap time, collision rate, and control smoothness comparison | `dqn-lidar` |
 | `comparison-interface-track` | Comparison interface for track-relative DQN agents, integration with the evaluation framework, and standardized performance comparison across agents | `jx_dqn_improvement` |
 | `final` | `comparison-interface-track` with `dqn-lidar-hairpin` merged in | both |
@@ -166,6 +166,8 @@ DQN episodes stop at the first wall contact. Progress shows how far the car got 
 ### DQN with track-relative / look-ahead observations
 
 `--obs-mode track` adds the car's offset, heading, and velocity relative to the centre line. `--obs-mode track-lookahead` also gives it centre line points 1–8 m ahead. Both use `scenarios/austria_centerline.npz`. `--lidar` is equivalent to `--obs-mode lidar`. See [DQN_TRACK.md](DQN_TRACK.md) for the setup and commands.
+
+We also tested several methods to improve track-lookahead DQN. First, we added a signed progress reward to reward forward movement instead of backward movement. We then used FTG driving demonstrations to train the model with Behavior Cloning (BC). We added motor and steering losses to help the model learn driving actions. We also tested BC-regularized DQN, which keeps an imitation loss during DQN training. The training scripts are train_ftg_bc.py and train_ftg_bc_rl.py. We used evaluate_ftg_bc.py to evaluate these models.
 
 ### DQN hairpin fine-tuning
 
