@@ -403,7 +403,7 @@ def margin_dqn_with_demos(action=3):
                        buffer_size=200, seed=0, replay_buffer_class=DemoMixDictReplayBuffer)
     model = driver.model
     buffer = model.replay_buffer
-    buffer.demo = DictReplayBuffer(64, buffer.observation_space, buffer.action_space, device='cpu')
+    buffer.demo = DictReplayBuffer(64, buffer.observation_space, buffer.action_space, device=buffer.device)
     rng = np.random.default_rng(0)
     for _ in range(64):
         obs = {'pose': rng.normal(size=(1, 6)), 'velocity': rng.normal(size=(1, 6)), 'time': np.zeros((1, 1), np.float32)}
