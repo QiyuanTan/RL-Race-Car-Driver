@@ -19,7 +19,7 @@ from racecar_gym.envs import gym_api
 from Agents.SB3Drivers import SB3Driver, dqn_wrappers
 from Agents.wrappers import SimStepCounter, StartModeWrapper, ForwardProgressStallRewardWrapper
 from Agents.centerline_curriculum_reward import Guidance, CenterlineGuidanceReward
-from train_v2 import dqn_scenario, checkpoint_dir, EvalCheckpoint, ResumableCheckpoint, dqn_settings
+from train import dqn_scenario, checkpoint_dir, EvalCheckpoint, ResumableCheckpoint, dqn_settings
 from Agents.track_features import feature_config
 
 

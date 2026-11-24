@@ -20,7 +20,7 @@ from stable_baselines3.common.utils import get_linear_fn
 from Agents.SB3Drivers import SB3Driver, dqn_wrappers
 from Agents.track_features import Centerline, feature_config
 from Agents.wrappers import SimStepCounter, ForwardProgressRewardWrapper
-from train_v2 import dqn_scenario, checkpoint_dir, EvalCheckpoint, ResumableCheckpoint, dqn_settings
+from train import dqn_scenario, checkpoint_dir, EvalCheckpoint, ResumableCheckpoint, dqn_settings
 
 
 class SustainedStallReward(ForwardProgressRewardWrapper):
