@@ -165,3 +165,57 @@ tensorboard --logdir logs
 
 For inference, `run_sim.py` provides a simple interface to load a trained model and run it in the simulator.
 
+
+## Shared evaluation interface
+
+`evaluate_shared.py` evaluates FTG, DQN (including `base`, `lidar`, `track`, and `track-lookahead` modes), and PPO/SAC with the existing `evaluate_baseline.run_episode` metrics. For the behavior-cloning geometry-only DQN, use `--obs-mode track-lookahead --geometry-only`. Models must be evaluated with their training-time observation mode, action repeat and feature settings. Saved-model observation and action spaces are checked before evaluation; geometry-only models have no complete configuration check, so the user must supply matching feature settings.
+
+Examples (install the project dependencies and racecar_gym first):
+
+```bash
+python evaluate_shared.py --algorithm ftg --episodes 10 --seed 100
+python evaluate_shared.py --algorithm dqn --model path/to/dqn.zip --obs-mode lidar --action-repeat 4
+python evaluate_shared.py --algorithm dqn --model path/to/student.zip --obs-mode track-lookahead --geometry-only --action-repeat 4
+python evaluate_shared.py --algorithm ppo --model models/ppo_model_w_collision.zip
+python evaluate_shared.py --algorithm sac --model path/to/sac.zip
+```
+
+Each episode uses a fresh process and JSON records the settings, summary and per-episode metrics. These are a common interface, not yet a fully aligned experiment: FTG uses `SingleAgentAustria-v0` and continues after wall contact; the SB3 scenarios terminate at the first contact. Smoothness per simulator step is affected by action repeat. Keep these differences in mind when comparing results.
+
+### Testing a trained model
+
+Get the model `.zip` file and, if available, its `config.json` from the person
+who trained it. Make sure you know the model's observation mode and action repeat.
+
+For DQN checkpoints, keep the files in this structure so the evaluator can
+find the configuration:
+
+```text
+models/checkpoints/run_name/
+├── config.json
+└── eval/
+    └── model.zip
+```
+
+Run one episode first to make sure the model loads. For example, to test a
+LiDAR DQN trained with action repeat 4:
+
+```bash
+python evaluate_shared.py --algorithm dqn \
+  --model models/checkpoints/run_name/eval/model.zip \
+  --obs-mode lidar --action-repeat 4 --episodes 1 --seed 100
+```
+
+Change the model path, observation mode, and action repeat to match your run.
+The DQN observation modes are `base`, `lidar`, `track`, and `track-lookahead`.
+For a geometry-only model, use `--obs-mode track-lookahead --geometry-only`.
+
+Once it works, use `--episodes 10 --seed 100` to test seeds 100–109. Results
+are saved in `results/shared/` as JSON.
+
+If the evaluator can't find `config.json`, check the training settings with
+your teammate. If the model uses new inputs, actions, or custom code, we may
+need to update the evaluator first.
+
+FTG and RL currently use different collision rules, and action repeat affects
+smoothness. Keep that in mind when comparing results.
